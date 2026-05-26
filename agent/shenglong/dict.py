@@ -96,6 +96,24 @@ STEEL_TYPE_PRICE: dict[int, float] = {
     14: 2320.0,
     15: 2020.0,
 }
+# 依据业务截图从上到下定义的优先级（数字越小，平局时优先级越高）。用于决出主料。
+MATERIAL_PRIORITY: dict[int, int] = {
+    1: 1,    # 重废1
+    2: 2,    # 重废2
+    3: 3,    # 重废3
+    12: 4,   # 生铁
+    11: 5,   # 中废
+    13: 6,   # 厚剪
+    4: 7,    # 剪料1
+    5: 8,    # 剪料2
+    6: 9,    # 剪料3
+    7: 10,   # 剪料4
+    8: 11,   # 破碎料1
+    9: 12,   # 破碎料2
+    10: 13,  # 破碎料3
+    14: 14,  # 钢筋切粒
+    15: 15,  # 汽车壳
+}
 
 
 def get_material_name(steel_type: Optional[int]) -> str:
@@ -163,8 +181,13 @@ def get_main_type_from_list(
     filtered = filter_main_candidates(items)
     if not filtered:
         return None
-    return max(filtered, key=lambda x: x[1])
-
+    
+    # 【核心修改】排序规则：
+    # 1. 优先按 rate 降序（-x[1]）
+    # 2. 当 rate 相同时，按 MATERIAL_PRIORITY 升序（越小越优先，找不到的给999垫底）
+    filtered.sort(key=lambda x: (-x[1], MATERIAL_PRIORITY.get(x[0], 999)))
+    
+    return filtered[0]
 
 def lookup_rate_of(
     items: Iterable[Tuple[Optional[int], float]], steel_type: int

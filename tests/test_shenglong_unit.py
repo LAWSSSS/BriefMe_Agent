@@ -846,9 +846,17 @@ def test_master_xlsx_user_provided_prev_not_overridden():
 
 def test_master_xlsx_empty_raises():
     from agent.shenglong.excel_writer import write_master_xlsx
-    import pytest
-    with pytest.raises(ValueError):
+    
+    try:
         write_master_xlsx([], Path("downloads/shenglong/_unit_test/empty.xlsx"))
+    except ValueError:
+        # 成功捕获到了 ValueError，说明测试通过
+        pass
+    else:
+        # 如果没有报错，说明代码有问题，强制抛出断言错误
+        raise AssertionError("Expected ValueError was not raised!")
+        
+    print("master_xlsx_empty_raises OK")
 
 
 def test_master_prev_deduction_matches_visible_sheet_formula():
@@ -1350,6 +1358,141 @@ def test_excel_summary_sheet1_first_period_no_prev():
     print("sheet1 first period OK")
 
 
+# =====================================================================
+# 补充测试：边界值、零值异常、平局优先级、无效输入
+# =====================================================================
+
+def test_calc_boundary_conditions():
+    """测试边界值：差异恰好 10%，扣杂比恰好 1.5 倍 / 绝对差异恰好 0.15 吨"""
+    from agent.shenglong.calculator import calc_truck
+    cfg = settings.shenglong
+
+    # 边界 1：占比差异恰好 10% (80% vs 70%) → 应当判定为 True (≤ 10%)
+    detail_diff_10 = {
+        "manualCheckResultVO": {
+            "avgResult": [{"steelType": 1, "steelRate": 0.80}, {"steelType": 11, "steelRate": 0.20}],
+            "avgDeduction": 0.10, "avgSteelPrice": 2800,
+            "checkDetails": [{"operatorName": "测试员", "deduction": 0.10, "details": [{"steelType": 1, "steelRate": 0.80}]}]
+        },
+        "totalCheckResult": {
+            "steelTypeRateList": [{"steelType": 1, "steelRate": 0.70}, {"steelType": 11, "steelRate": 0.30}],
+            "totalDeductWeight": 100, # 0.1吨
+        },
+    }
+    t1 = calc_truck("2026-05-01", "鲁B-BND1", 1, "f-bnd1", detail_diff_10, cfg)
+    
+    # 修复：浮点数对比
+    assert abs(t1.diff_rate - 10.0) < 1e-6, f"差异值应该是10.0，实际是 {t1.diff_rate}"
+    assert t1.main_same is True, "差异恰好 10% 应该判定为主料一致"
+
+    # 边界 2：扣重比例恰好 1.5 倍 (0.15 吨 vs 0.1 吨) → 应当判定为 True (在 [0.5, 1.5] 闭区间内)
+    detail_deduct_ratio = {
+        "manualCheckResultVO": {
+            "avgResult": [{"steelType": 1, "steelRate": 0.80}],
+            "avgDeduction": 0.10, "avgSteelPrice": 2800,
+            "checkDetails": [{"operatorName": "测试员", "deduction": 0.10, "details": [{"steelType": 1, "steelRate": 0.80}]}]
+        },
+        "totalCheckResult": {
+            "steelTypeRateList": [{"steelType": 1, "steelRate": 0.80}],
+            "totalDeductWeight": 150, # 0.15吨, ratio = 1.5
+        },
+    }
+    t2 = calc_truck("2026-05-01", "鲁B-BND2", 1, "f-bnd2", detail_deduct_ratio, cfg)
+    
+    # 修复：因为 0.15 / 0.1 = 1.4999999999999998，用 abs() < 1e-6 容差对比
+    assert abs(t2.weight_ratio - 1.5) < 1e-6, f"比例应该是 1.5，实际是 {t2.weight_ratio}"
+    assert t2.deduction_compliant is True, "扣重比例恰好 1.5 倍应当判定为合格"
+    
+    print("boundary conditions OK")
+
+def test_aggregate_empty_or_zero_division():
+    """测试零值与除零异常：空列表聚合，以及扣重均为 0 的情况"""
+    from agent.shenglong.calculator import calc_truck
+    
+    # 1. 传入空列表给聚合函数，验证不崩溃
+    stats_empty = aggregate_daily("2026-05-01", [])
+    assert stats_empty.judgable_trucks == 0
+    assert stats_empty.recognition_rate is None
+    assert stats_empty.deduction_evaluable == 0
+
+    # 2. 双方扣重全为 0 (例如极品纯净废钢)，不应触发 ZeroDivisionError
+    detail_zero = {
+        "manualCheckResultVO": {
+            "avgResult": [{"steelType": 1, "steelRate": 1.0}],
+            "avgDeduction": 0.0, "avgSteelPrice": 2800,
+            "checkDetails": [{"operatorName": "张三", "deduction": 0.0, "details": [{"steelType": 1, "steelRate": 1.0}]}]
+        },
+        "totalCheckResult": {
+            "steelTypeRateList": [{"steelType": 1, "steelRate": 1.0}],
+            "totalDeductWeight": 0,
+        },
+    }
+    t_zero = calc_truck("2026-05-01", "鲁Z-0000", 1, "f-zero", detail_zero, settings.shenglong)
+    assert t_zero.manual_deduct_ton == 0.0
+    assert t_zero.ai_deduct_ton == 0.0
+    assert t_zero.deduction_compliant is True, "双方均为0时应判定为符合或通过绝对值条件判定"
+    
+    print("zero division and empty list OK")
+
+
+def test_main_material_tie_breaker():
+    """测试料型占比平局时的优先级决策 (依据图表从上往下)"""
+    from agent.shenglong.dict import get_main_type_from_list
+    
+    # 场景 A：重废一 (1) 和 中废 (11) 同样是 40%，剪1 (4) 是 20%
+    # 预期：重废一排在图片最上方，优先级最高，胜出
+    items_a = [(11, 0.40), (1, 0.40), (4, 0.20)]
+    main_a = get_main_type_from_list(items_a)
+    assert main_a[0] == 1, "平局时，重废一(1)优先级高于中废(11)"
+
+    # 场景 B：重废二 (2) 和 中废 (11) 同样是 45%
+    # 预期：重废二在图片中排在中废上面，胜出
+    items_b = [(11, 0.45), (2, 0.45)]
+    main_b = get_main_type_from_list(items_b)
+    assert main_b[0] == 2, "平局时，重废二(2)优先级高于中废(11)"
+    
+    # 场景 C：厚剪 (13) 和 中废 (11) 同样是 50%
+    # 预期：中废(11)在图片中排在厚剪(13)上面，胜出
+    items_c = [(13, 0.50), (11, 0.50)]
+    main_c = get_main_type_from_list(items_c)
+    assert main_c[0] == 11, "平局时，中废(11)优先级高于厚剪(13)"
+
+    print("tie breaker OK")
+
+
+def test_operator_has_only_invalid_materials():
+    """测试有效人员录入了完全无效的料型，导致逻辑上缺失"""
+    from agent.shenglong.calculator import calc_truck
+    
+    detail = {
+        "manualCheckResultVO": {
+            "avgDeduction": 0.1, "avgSteelPrice": 2800,
+            "checkDetails": [
+                {
+                    "operatorName": "正常人", # 不在黑名单
+                    "deduction": 0.1, "steelPrice": 2800,
+                    "details": [
+                        {"steelType": 16, "steelRate": 0.8}, # 超标（需剔除）
+                        {"steelType": 0, "steelRate": 0.2},  # 空值（需剔除）
+                    ]
+                }
+            ]
+        },
+        "totalCheckResult": {
+            "steelTypeRateList": [{"steelType": 1, "steelRate": 1.0}],
+            "totalDeductWeight": 100,
+        },
+    }
+    t = calc_truck("2026-05-01", "鲁E-EMPTY", 1, "f-empty", detail, settings.shenglong)
+    
+    # 虽然人在，但剔除无效料型后，主料为空
+    assert t.manual_main is None
+    # 整体判定应该退化为无法比对
+    assert t.main_same is None
+    
+    print("operator only invalid materials OK")
+
+
 if __name__ == "__main__":
     test_dict()
     test_shenglong_record_station_number_list()
@@ -1379,4 +1522,11 @@ if __name__ == "__main__":
     test_heavy_normalized_formula_example()
     test_aggregate_period_heavy_normalized_metric()
     test_heavy_master_tool_generates_distinct_report()
+    
+    # 追加的补充测试
+    test_calc_boundary_conditions()
+    test_aggregate_empty_or_zero_division()
+    test_main_material_tie_breaker()
+    test_operator_has_only_invalid_materials()
+    
     print("\nAll shenglong unit smoke tests PASSED")
