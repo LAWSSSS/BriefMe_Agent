@@ -44,8 +44,8 @@ BriefMe 是一个为工业现场量身定制的数据统计交互智能体。
 ### 1. 克隆项目与配置环境
 强烈建议使用纯净的虚拟环境隔离依赖：
 ```bash
-git clone [https://github.com/你的用户名/Autoagent1.git](https://github.com/你的用户名/Autoagent1.git)
-cd Autoagent1
+git clone https://github.com/LAWSSSS/BriefMe_Agent.git
+cd BriefMe_Agent
 
 # 创建并激活虚拟环境
 python -m venv venv
