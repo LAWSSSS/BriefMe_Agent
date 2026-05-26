@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import gradio as gr
 import httpx
@@ -157,19 +157,41 @@ def _scan_latest_artifacts() -> Tuple[Optional[str], Optional[str], List[str]]:
 # =====================================================================
 # 聊天主回调
 # =====================================================================
-def respond(message: str, history: list, session: dict):
-    """用户提交 → 走 agent → 同步更新产物面板"""
-    if not message.strip():
-        xlsx, pptx, imgs = _scan_latest_artifacts()
-        return "", history, session, xlsx, pptx, imgs
+def _normalize_chat_history(history: list):
+    normalized = []
+    for item in history or []:
+        if isinstance(item, dict) and "role" in item and "content" in item:
+            normalized.append({"role": item["role"], "content": item.get("content") or ""})
+        elif isinstance(item, (tuple, list)) and len(item) >= 2:
+            user_text = (item[0] or "").strip()
+            assistant_text = (item[1] or "").strip()
+            if user_text:
+                normalized.append({"role": "user", "content": user_text})
+            if assistant_text:
+                normalized.append({"role": "assistant", "content": assistant_text})
+    return normalized
 
-    reply, session = agent.chat(message, session)
-    history = (history or []) + [
-        {"role": "user", "content": message},
-        {"role": "assistant", "content": reply},
-    ]
+
+def append_message(message: str, history: list):
+    history = _normalize_chat_history(history)
+    message = (message or "").strip()
+    if not message:
+        return "", history, ""
+    return "", history + [{"role": "user", "content": message}], message
+
+
+def respond(pending_message: str, history: list, session: dict):
+    """用户提交 → 走 agent → 同步更新产物面板"""
+    history = _normalize_chat_history(history)
+    pending_message = (pending_message or "").strip()
+    if not pending_message or not history:
+        xlsx, pptx, imgs = _scan_latest_artifacts()
+        return history, session, xlsx, pptx, imgs
+
+    reply, session = agent.chat(pending_message, session)
+    history.append({"role": "assistant", "content": str(reply)})
     xlsx, pptx, imgs = _scan_latest_artifacts()
-    return "", history, session, xlsx, pptx, imgs
+    return history, session, xlsx, pptx, imgs
 
 
 def clear_chat():
@@ -180,40 +202,50 @@ def clear_chat():
 # =====================================================================
 # 快捷 prompt（档位 4）—— 点按钮填入输入框，由用户二次回车发送
 # =====================================================================
-def _quick_prompts() -> dict:
+def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
     yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
     week_start = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
     today_s = date.today().strftime("%Y-%m-%d")
     return {
-        "binxin_yesterday": f"发 {yesterday} 的【镔鑫】废钢检判情况",
-        "binxin_export": (
-            f"导出 {week_start} 到 {today_s} 的【镔鑫】废钢检判报表并下载错判图"
-        ),
-        "binxin_ppt": (
-            f"按 {week_start} 到 {today_s} 的【镔鑫】检判结果生成对应的 PPT 汇报页"
-        ),
-        "shenglong_yesterday": f"发 {yesterday} 的【盛隆】废钢检判情况",
-        "shenglong_export": (
-            f"导出 {week_start} 到 {today_s} 的【盛隆】废钢检判报表"
-        ),
-        "shenglong_master": (
-            "生成【盛隆】主表，把这两个周期累积到一个 xlsx："
-            "2026-04-14 至 2026-04-22、2026-04-23 至 2026-04-29"
-        ),
-        "shenglong_heavy_master": (
-            "生成【盛隆】重废1/2/3归一化准确率主表，把这几个周期累积到一个 xlsx："
-            "准确率统计时排除人工检判结果中没有任意重废1/2/3料型的车次；"
-            "2026-04-14 至 2026-04-22、2026-04-23 至 2026-04-29、"
-            "2026-04-30 至 2026-05-06、2026-05-07 至 2026-05-13；"
-            "其中 2026-04-30 至 2026-05-06、2026-05-07 至 2026-05-13 "
-            "当作一个统计周期进行统计"
-        ),
-        "packing_yesterday": "发昨天的打包带情况",
-        "packing_abnormal": "下载昨天打包带的异常图片",
-        "help": (
-            "请列出你支持的所有功能和典型用法示例。"
-            "分【打包带钢卷 @ 永锋】【废钢检判 @ 镔鑫】【废钢检判 @ 盛隆】三节回答。"
-        ),
+        "永锋钢铁": {
+            "打包带钢卷": {
+                "昨日打包带情况": "发昨天的打包带情况",
+                "下载昨日打包带异常图": "下载昨天打包带的异常图片",
+            }
+        },
+        "镔鑫钢铁": {
+            "废钢检判": {
+                "昨日废钢检判情况": f"发 {yesterday} 的【镔鑫】废钢检判情况",
+                "近 7 天报表 + 错判图": (
+                    f"导出 {week_start} 到 {today_s} 的【镔鑫】废钢检判报表并下载错判图"
+                ),
+                "近 7 天 PPT 汇报页": (
+                    f"按 {week_start} 到 {today_s} 的【镔鑫】检判结果生成对应的 PPT 汇报页"
+                ),
+                "支持哪些指令": (
+                    "请列出你支持的所有功能和典型用法示例。"
+                    "分【打包带钢卷 @ 永锋】【废钢检判 @ 镔鑫】【废钢检判 @ 盛隆】三节回答。"
+                ),
+            }
+        },
+        "盛隆钢铁": {
+            "废钢检判": {
+                "昨日废钢检判情况": f"发 {yesterday} 的【盛隆】废钢检判情况",
+                "近 7 天报表": f"导出 {week_start} 到 {today_s} 的【盛隆】废钢检判报表",
+                "主表（多周期累积）": (
+                    "生成【盛隆】主表，把这两个周期累积到一个 xlsx："
+                    "2026-04-14 至 2026-04-22、2026-04-23 至 2026-04-29"
+                ),
+                "重废归一化主表": (
+                    "生成【盛隆】重废1/2/3归一化准确率主表，把这几个周期累积到一个 xlsx："
+                    "准确率统计时排除人工检判结果中没有任意重废1/2/3料型的车次；"
+                    "2026-04-14 至 2026-04-22、2026-04-23 至 2026-04-29、"
+                    "2026-04-30 至 2026-05-06、2026-05-07 至 2026-05-13；"
+                    "其中 2026-04-30 至 2026-05-06、2026-05-07 至 2026-05-13 "
+                    "当作一个统计周期进行统计"
+                ),
+            }
+        },
     }
 
 
@@ -375,6 +407,15 @@ CUSTOM_CSS = """
 
 /* 让聊天气泡更紧凑 */
 .chatbot .message-wrap { padding: 8px 12px; }
+.chatbot .message.user { justify-content: flex-end; }
+.chatbot .message.user .bubble {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    color: #fff;
+}
+.chatbot .message.assistant .bubble {
+    background: #eff6ff;
+    color: #0f172a;
+}
 """
 
 
@@ -383,6 +424,25 @@ CUSTOM_CSS = """
 # =====================================================================
 def build_ui() -> gr.Blocks:
     q = _quick_prompts()
+
+    def _update_businesses(project):
+        first_business = next(iter(q[project]))
+        first_command = next(iter(q[project][first_business]))
+        return (
+            gr.update(choices=list(q[project].keys()), value=first_business),
+            gr.update(choices=list(q[project][first_business].keys()), value=first_command),
+            q[project][first_business][first_command],
+        )
+
+    def _update_commands(project, business):
+        first_command = next(iter(q[project][business]))
+        return (
+            gr.update(choices=list(q[project][business].keys()), value=first_command),
+            q[project][business][first_command],
+        )
+
+    def _select_command(project, business, command):
+        return q[project][business][command]
 
     with gr.Blocks(
         title="BriefMe · 多场景数据统计助手",
@@ -408,43 +468,73 @@ def build_ui() -> gr.Blocks:
 
         # ------- 档位 3 · 左右分栏 -------
         with gr.Row():
-            # --- 左侧：快捷指令 + 状态说明 ---
+            # --- 左侧：业务下拉 + 状态说明 ---
             with gr.Column(scale=1, min_width=260):
                 gr.HTML('<div class="side-title">快捷指令</div>')
 
-                btn_binxin_daily = gr.Button(
-                    "📊 昨日【镔鑫】废钢检判统计", variant="primary", size="md"
+                project_select = gr.Dropdown(
+                    choices=list(q.keys()),
+                    value="永锋钢铁",
+                    label="项目",
                 )
-                btn_binxin_export = gr.Button(
-                    "📑 近 7 天【镔鑫】报表+错判图", variant="primary", size="md"
+                business_select = gr.Dropdown(
+                    choices=list(q["永锋钢铁"].keys()),
+                    value="打包带钢卷",
+                    label="业务",
                 )
-                btn_binxin_ppt = gr.Button(
-                    "🎯 近 7 天【镔鑫】生成 PPT 汇报页", variant="primary", size="md"
+                command_select = gr.Dropdown(
+                    choices=list(q["永锋钢铁"]["打包带钢卷"].keys()),
+                    value="昨日打包带情况",
+                    label="指令",
                 )
-                btn_shenglong_daily = gr.Button(
-                    "🟢 昨日【盛隆】废钢检判统计", variant="primary", size="md"
+                command_preview = gr.Textbox(
+                    label="待发送内容",
+                    value=q["永锋钢铁"]["打包带钢卷"]["昨日打包带情况"],
+                    interactive=False,
+                    lines=4,
                 )
-                btn_shenglong_export = gr.Button(
-                    "🟢 近 7 天【盛隆】报表", variant="primary", size="md"
+                fill_btn = gr.Button("填入输入框", variant="primary", size="sm")
+
+                def _update_businesses(project):
+                    first_business = next(iter(q[project]))
+                    first_command = next(iter(q[project][first_business]))
+                    return (
+                        gr.update(choices=list(q[project].keys()), value=first_business),
+                        gr.update(choices=list(q[project][first_business].keys()), value=first_command),
+                        q[project][first_business][first_command],
+                    )
+
+                def _update_commands(project, business):
+                    first_command = next(iter(q[project][business]))
+                    return (
+                        gr.update(choices=list(q[project][business].keys()), value=first_command),
+                        q[project][business][first_command],
+                    )
+
+                def _select_command(project, business, command):
+                    return q[project][business][command]
+
+                project_select.change(
+                    _update_businesses,
+                    inputs=project_select,
+                    outputs=[business_select, command_select, command_preview],
+                    queue=False,
                 )
-                btn_shenglong_master = gr.Button(
-                    "📚 【盛隆】主表（多周期累积·可改日期）",
-                    variant="primary", size="md",
+                business_select.change(
+                    _update_commands,
+                    inputs=[project_select, business_select],
+                    outputs=[command_select, command_preview],
+                    queue=False,
                 )
-                btn_shenglong_heavy_master = gr.Button(
-                    "📘 【盛隆】重废归一化主表（排除无重废车次）",
-                    variant="primary", size="md",
+                command_select.change(
+                    _select_command,
+                    inputs=[project_select, business_select, command_select],
+                    outputs=command_preview,
+                    queue=False,
                 )
-                btn_pt_yesterday = gr.Button(
-                    "🧵 昨日打包带情况", variant="secondary", size="md"
-                )
-                btn_pt_abnormal = gr.Button(
-                    "🖼 下载昨日打包带异常图", variant="secondary", size="md"
-                )
-                btn_help = gr.Button("❓ 支持哪些指令", variant="secondary", size="md")
 
                 gr.HTML(
-                    '<div class="side-title">项目归属</div>'
+                    '<div class="side-title">业务归属</div>'
                     '<div class="proj-card">'
                     '  <div class="proj-row">'
                     '    <span class="proj-tag pt">打包带钢卷</span>'
@@ -483,7 +573,6 @@ def build_ui() -> gr.Blocks:
                     render_markdown=True,
                     elem_classes="chatbot",
                     avatar_images=(None, None),
-                    group_consecutive_messages=False,
                     placeholder=(
                         "<center><br/>"
                         "👋 你好，我是 BriefMe，中冶赛迪的多场景数据统计助手<br/>"
@@ -500,11 +589,15 @@ def build_ui() -> gr.Blocks:
                         scale=9,
                         container=False,
                         autofocus=True,
+                        lines=3,
                     )
                     submit_btn = gr.Button("发送", scale=1, variant="primary")
 
                 with gr.Row():
                     clear_btn = gr.Button("🗑 清空对话", size="sm")
+
+                def _fill_message(text):
+                    return text
 
                 # ------- 档位 5 · 产物下载面板 -------
                 with gr.Accordion(
@@ -533,11 +626,71 @@ def build_ui() -> gr.Blocks:
 
         session = gr.State({"vpn_state": "unknown", "messages": []})
 
-        # --- 绑定：输入/按钮 ---
-        respond_inputs = [msg, chatbot, session]
-        respond_outputs = [msg, chatbot, session, report_file, pptx_file, gallery]
-        msg.submit(respond, respond_inputs, respond_outputs)
-        submit_btn.click(respond, respond_inputs, respond_outputs)
+# --- 绑定：输入/按钮 ---
+        def _sync_append(message, history):
+            history = _normalize_chat_history(history)
+            message = (message or "").strip()
+            if not message:
+                # 返回 2 个值：第一个空字符串用来清空输入框 msg，第二个更新 chatbot
+                return "", history
+            return "", history + [{"role": "user", "content": message}]
+
+        def _sync_respond(_pending_message, history, session):
+            history = _normalize_chat_history(history)
+            if not history:
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                return history, session, xlsx, pptx, imgs
+
+            last_item = history[-1]
+            
+            # --- 修复列表 (list) 没有 strip 属性的报错 ---
+            if isinstance(last_item, dict):
+                content = last_item.get("content", "")
+                if isinstance(content, list):
+                    # 如果大模型结构变为了 list，安全提取里面的 text 字段
+                    text_parts = [str(item.get("text", "")) for item in content if isinstance(item, dict) and "text" in item]
+                    pending_message = "".join(text_parts).strip()
+                else:
+                    pending_message = str(content).strip()
+            else:
+                pending_message = ""
+            # ---------------------------------------------
+
+            if not pending_message:
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                return history, session, xlsx, pptx, imgs
+
+            if isinstance(last_item, dict) and last_item.get("role") == "assistant":
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                return history, session, xlsx, pptx, imgs
+
+            reply, session = agent.chat(pending_message, session)
+            history.append({"role": "assistant", "content": str(reply)})
+            xlsx, pptx, imgs = _scan_latest_artifacts()
+            return history, session, xlsx, pptx, imgs
+
+        # 这里的 outputs 数量改为了 2 个 [msg, chatbot]，这样 msg 才会真正接收到 "" 并被清空
+        msg.submit(
+            _sync_append, 
+            inputs=[msg, chatbot], 
+            outputs=[msg, chatbot], 
+            queue=False
+        ).then(
+            _sync_respond,
+            inputs=[msg, chatbot, session],
+            outputs=[chatbot, session, report_file, pptx_file, gallery],
+        )
+        
+        submit_btn.click(
+            _sync_append,
+            inputs=[msg, chatbot],
+            outputs=[msg, chatbot], 
+            queue=False,
+        ).then(
+            _sync_respond,
+            inputs=[msg, chatbot, session],
+            outputs=[chatbot, session, report_file, pptx_file, gallery],
+        )
 
         clear_btn.click(
             clear_chat,
@@ -546,19 +699,44 @@ def build_ui() -> gr.Blocks:
 
         refresh_btn.click(_status_html, outputs=status_display)
 
-        # --- 绑定：档位 4 快捷按钮（只填充，不自动发送）---
-        btn_binxin_daily.click(lambda: q["binxin_yesterday"], outputs=msg)
-        btn_binxin_export.click(lambda: q["binxin_export"], outputs=msg)
-        btn_binxin_ppt.click(lambda: q["binxin_ppt"], outputs=msg)
-        btn_shenglong_daily.click(lambda: q["shenglong_yesterday"], outputs=msg)
-        btn_shenglong_export.click(lambda: q["shenglong_export"], outputs=msg)
-        btn_shenglong_master.click(lambda: q["shenglong_master"], outputs=msg)
-        btn_shenglong_heavy_master.click(
-            lambda: q["shenglong_heavy_master"], outputs=msg
+        def _update_businesses(project):
+            first_business = next(iter(q[project]))
+            first_command = next(iter(q[project][first_business]))
+            return (
+                gr.update(choices=list(q[project].keys()), value=first_business),
+                gr.update(choices=list(q[project][first_business].keys()), value=first_command),
+                q[project][first_business][first_command],
+            )
+
+        def _update_commands(project, business):
+            first_command = next(iter(q[project][business]))
+            return (
+                gr.update(choices=list(q[project][business].keys()), value=first_command),
+                q[project][business][first_command],
+            )
+
+        def _select_command(project, business, command):
+            return q[project][business][command]
+
+        project_select.change(
+            _update_businesses,
+            inputs=project_select,
+            outputs=[business_select, command_select, command_preview],
+            queue=False,
         )
-        btn_pt_yesterday.click(lambda: q["packing_yesterday"], outputs=msg)
-        btn_pt_abnormal.click(lambda: q["packing_abnormal"], outputs=msg)
-        btn_help.click(lambda: q["help"], outputs=msg)
+        business_select.change(
+            _update_commands,
+            inputs=[project_select, business_select],
+            outputs=[command_select, command_preview],
+            queue=False,
+        )
+        command_select.change(
+            _select_command,
+            inputs=[project_select, business_select, command_select],
+            outputs=command_preview,
+            queue=False,
+        )
+        fill_btn.click(_fill_message, inputs=command_preview, outputs=msg, queue=False)
 
     return demo
 
