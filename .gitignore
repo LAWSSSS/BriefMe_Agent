@@ -1,0 +1,32 @@
+# Python 缓存
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 视频文件（重要！）
+*.mov
+*.mp4
+*.avi
+*.mkv
+*.flv
+
+# 你的自定义文件夹
+downloads/
+tmp_preview/
+venv/
+演示文件/
+
+# 日志文件
+*.log
+
+
+# IDE 配置（可选）
+.vscode/
+.idea/
+*.swp

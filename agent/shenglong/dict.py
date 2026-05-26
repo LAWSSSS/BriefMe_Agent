@@ -1,0 +1,182 @@
+"""盛隆废钢料型字典
+
+固化自盛隆后端枚举源码截图：
+  0  DEFAULT       （空值/未知）
+  1  zhongfei1     重废1
+  2  zhongfei2     重废2
+  3  zhongfei3     重废3
+  4  jianliao1     剪料1
+  5  jianliao2     剪料2
+  6  jianliao3     剪料3
+  7  jianliao4     剪料4
+  8  posuiliao1    破碎料1
+  9  posuiliao2    破碎料2
+ 10  posuiliao3    破碎料3
+ 11  medium        中废
+ 12  shengtie      生铁
+ 13  houjian       厚剪
+ 14  gangjinqieli  钢筋切粒
+ 15  qicheke       汽车壳
+ 16  chaobiao      超标（参考型指标，主料判定时剔除）
+
+与镔鑫字典（agent/scrap/dict.py）编码含义完全不同，严禁互相引用。
+"""
+from __future__ import annotations
+
+from typing import Iterable, List, Optional, Tuple
+
+STEEL_TYPE: dict[int, str] = {
+    0: "",
+    1: "重废1",
+    2: "重废2",
+    3: "重废3",
+    4: "剪料1",
+    5: "剪料2",
+    6: "剪料3",
+    7: "剪料4",
+    8: "破碎料1",
+    9: "破碎料2",
+    10: "破碎料3",
+    11: "中废",
+    12: "生铁",
+    13: "厚剪",
+    14: "钢筋切粒",
+    15: "汽车壳",
+    16: "超标",
+}
+
+# 参考型：不参与主料判定，只作为辅助维度统计（超尺寸废钢占比）
+REFERENCE_TYPES: frozenset[int] = frozenset({16})
+
+# 空值编码（过滤掉不进入任何统计）
+EMPTY_TYPES: frozenset[int] = frozenset({0})
+
+# 新准确率口径专用：只评估重废1/2/3，并把这三类占比归一化到 100%
+HEAVY_STEEL_TYPES: frozenset[int] = frozenset({1, 2, 3})
+
+# 检判员黑名单：这些人是测试 / 管理员 / 离场人员，不参与人工合并
+# 计算每辆车的"人工最终结果"时，会先把 checkDetails 里这些人的明细剔除，
+# 再用剩下的人重新平均出 manual_materials/manual_deduct_ton/manual_steel_price。
+# 如果剔除后只剩 0 个人，整辆车视为"人工结果缺失"——不计入识别率/扣重符合率分母。
+EXCLUDED_OPERATORS: frozenset[str] = frozenset({
+    "施宏波",
+    "冉星明",
+    "周倩",
+    "王宇泰",
+    "王重阳",
+})
+
+
+def is_excluded_operator(name: Optional[str]) -> bool:
+    """判定一个人工检判员是否在黑名单中（按姓名严格匹配，去除两端空白）"""
+    if not name:
+        return False
+    return str(name).strip() in EXCLUDED_OPERATORS
+
+# 反向映射：中文 → 编码（调试/Excel 兼容用途）
+STEEL_TYPE_NAME_TO_CODE: dict[str, int] = {
+    v: k for k, v in STEEL_TYPE.items() if v
+}
+
+# 盛隆废钢当前生效单价（元/吨）
+STEEL_TYPE_PRICE: dict[int, float] = {
+    1: 2320.0,
+    2: 2300.0,
+    3: 2280.0,
+    4: 2180.0,
+    5: 2130.0,
+    6: 2070.0,
+    7: 1320.0,
+    8: 2210.0,
+    9: 2180.0,
+    10: 2140.0,
+    11: 2260.0,
+    12: 2250.0,
+    13: 2230.0,
+    14: 2320.0,
+    15: 2020.0,
+}
+
+
+def get_material_name(steel_type: Optional[int]) -> str:
+    """把 steelType 编码转为中文名；空/未知返回 "--"。
+
+    Examples:
+        >>> get_material_name(1)
+        '重废1'
+        >>> get_material_name(11)
+        '中废'
+        >>> get_material_name(0)
+        '--'
+        >>> get_material_name(None)
+        '--'
+    """
+    if steel_type is None:
+        return "--"
+    code = int(steel_type)
+    if code in EMPTY_TYPES:
+        return "--"
+    return STEEL_TYPE.get(code, f"未知{code}")
+
+
+def is_valid(steel_type: Optional[int]) -> bool:
+    """是否为"参与主料判定"的合法料型（非空值、非参考型）"""
+    if steel_type is None:
+        return False
+    code = int(steel_type)
+    if code in EMPTY_TYPES or code in REFERENCE_TYPES:
+        return False
+    return code in STEEL_TYPE
+
+
+def filter_main_candidates(
+    items: Iterable[Tuple[Optional[int], float]],
+) -> List[Tuple[int, float]]:
+    """从 (steelType, rate) 列表中剔除空值和参考型，返回合法候选列表"""
+    out: List[Tuple[int, float]] = []
+    for st, rate in items:
+        if st is None:
+            continue
+        code = int(st)
+        if code in EMPTY_TYPES or code in REFERENCE_TYPES:
+            continue
+        if code not in STEEL_TYPE:
+            continue
+        try:
+            out.append((code, float(rate)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def get_main_type_from_list(
+    items: Iterable[Tuple[Optional[int], float]],
+) -> Optional[Tuple[int, float]]:
+    """从料型占比列表中取占比最高的合法主料型。
+
+    Args:
+        items: 形如 [(steelType, rate), ...]；rate 建议统一到"百分比"或"0~1"任一种口径
+
+    Returns:
+        (steelType, rate) 或 None（列表为空 / 全部是空值/参考型）
+    """
+    filtered = filter_main_candidates(items)
+    if not filtered:
+        return None
+    return max(filtered, key=lambda x: x[1])
+
+
+def lookup_rate_of(
+    items: Iterable[Tuple[Optional[int], float]], steel_type: int
+) -> Optional[float]:
+    """在料型占比列表中查某个 steelType 的占比；找不到返回 None"""
+    target = int(steel_type)
+    for st, rate in items:
+        if st is None:
+            continue
+        if int(st) == target:
+            try:
+                return float(rate)
+            except (TypeError, ValueError):
+                return None
+    return None
