@@ -75,15 +75,41 @@ def _write_sheet(ws, title: str, rows):
         for c in range(1, 20):
             ws.cell(i, c).alignment = Alignment(horizontal="center", vertical="center")
 
+    summary_row = len(rows) + 5
+    last_data_row = len(rows) + 2
+
+    ws.cell(summary_row, 1, "五区间平均误差（不包含异常数据）")
+    ws.cell(summary_row, 2, f"=ROUND(AVERAGE(D{summary_row},F{summary_row},H{summary_row},J{summary_row},L{summary_row}),2)")
+    ws.cell(summary_row, 3, "0-5mm平均误差值（不包含异常数据）")
+    ws.cell(summary_row, 4, "=AVERAGE(O:O)")
+    ws.cell(summary_row, 5, "5-10mm平均误差值（不包含异常数据）")
+    ws.cell(summary_row, 6, "=AVERAGE(P:P)")
+    ws.cell(summary_row, 7, "10-25mm平均误差值（不包含异常数据）")
+    ws.cell(summary_row, 8, "=AVERAGE(Q:Q)")
+    ws.cell(summary_row, 9, "25-40mm平均误差值（不包含异常数据）")
+    ws.cell(summary_row, 10, "=AVERAGE(R:R)")
+    ws.cell(summary_row, 11, ">40mm平均误差值（不包含异常数据）")
+    ws.cell(summary_row, 12, "=AVERAGE(S:S)")
+
+    for c in range(1, 13):
+        ws.cell(summary_row, c).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.cell(summary_row, c).font = Font(bold=False)
+
     for c in range(1, 20):
         ws.column_dimensions[get_column_letter(c)].width = 13
     ws.column_dimensions["A"].width = 12
     ws.column_dimensions["B"].width = 8
     ws.column_dimensions["C"].width = 13
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["C"].width = 24
+    ws.column_dimensions["E"].width = 24
+    ws.column_dimensions["G"].width = 24
+    ws.column_dimensions["I"].width = 24
+    ws.column_dimensions["K"].width = 24
     for c in range(4, 20):
-        for r in range(3, len(rows) + 3):
+        for r in range(3, summary_row + 1):
             ws.cell(r, c).number_format = "0.00"
-    _apply_border(ws, 1, max(2, len(rows) + 2), 1, 19)
+    _apply_border(ws, 1, summary_row, 1, 19)
     ws.freeze_panes = "A3"
 
 
