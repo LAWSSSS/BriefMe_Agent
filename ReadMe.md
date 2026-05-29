@@ -46,8 +46,8 @@ BriefMe 是一个为工业现场量身定制的数据统计交互智能体。
 ### 1. 克隆项目与配置环境
 强烈建议使用纯净的虚拟环境隔离依赖：
 ```bash
-git clone [https://github.com/你的用户名/Autoagent1.git](https://github.com/你的用户名/Autoagent1.git)
-cd Autoagent1
+git clone https://github.com/LAWSSSS/BriefMe_Agent.git
+cd BriefMe_Agent
 
 # 创建并激活虚拟环境
 python -m venv venv
@@ -117,10 +117,11 @@ agent智能体大赛/
 │   ├── tools.py                   # 给大模型看的 Function Calling Schema
 │   ├── data_fetcher.py            # 永锋打包带取数与异常处理
 │   ├── scrap/                     # 📦 镔鑫废钢子包 (含 API 解析、业务统计、PPT 生成)
-│   └── shenglong/                 # 📦 盛隆废钢子包 (含 API 解析、黑名单过滤、复杂口径聚合)
+│   ├── shenglong/                 # 📦 盛隆废钢子包 (含 API 解析、黑名单过滤、复杂口径聚合)
+│   └── yongfeng/                  # 📦 永锋烧结矿子包（含API解析、数据计算、报表输出）
 ├── tools/                         # CLI 批量导出工具脚本
 ├── tests/                         # 单元测试与业务逻辑断言
-└── downloads/                     # 自动生成的报表、图片产物目录 (请勿在此手写业务依赖)
+└── downloads/                     # 自动生成的报表、图片产物目录
 ```
 
 ## 🧑‍💻 开发者交接与协同规范 (Git Workflow)
