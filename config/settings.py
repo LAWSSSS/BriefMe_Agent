@@ -103,12 +103,34 @@ class LLMConfig:
 
 
 @dataclass
+class YongfengConfig:
+    """永锋烧结矿准确率配置"""
+
+    analysis_base_url: str = "http://qbee.lg.china-yongfeng.com/"
+    analysis_query_base_url: str = "http://iron.lg.china-yongfeng.com/"
+    login_endpoint: str = "/auth/api/sysmgr/sso/login"
+    account: str = "22499"
+    password: str = "544bc44fb14b08be2557d80242c48783"
+    visual_1_base_url: str = "http://vision.lg.china-yongfeng.com"
+    visual_2_base_url: str = "http://vision.test.lg.china-yongfeng.com"
+    visual_username: str = "test"
+    visual_password: str = "Cisdi_mv@8888"
+    analysis_token: str = (
+        "Bear eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJjdXJyZW50VGltZU1pbGxpcyI6IjE3Nzk4Njg5MTU3MTIiLCJhY2Nlc3NDb2RlIjoicWIucWJlZS5hbGwiLCJuZWVkUmVmcmVzaCI6dHJ1ZSwiZXhwIjoxNzgwNDczNzE1LCJ1c2VySWQiOiJkZmM0OGU4ZDUxOTg0MmVkOTJiOTM4ZjA3ZDIxYmU4YyIsImFjY291bnRLZXkiOiJkZmM0OGU4ZDUxOTg0MmVkOTJiOTM4ZjA3ZDIxYmU4YyJ9.KKLmVZu8FA5zC07bNbTVik2-kHTpwVVj8AsX29XFQW8.Nzk3NDI0M2MzZjk0MTFlYmE2MWVmYTE2M2U5ZDIxYzM="
+    )
+    api_code: str = "st2"
+
+
+@dataclass
 class Settings:
     vision: VisionConfig = field(default_factory=VisionConfig)
     vpn: VPNConfig = field(default_factory=VPNConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    yongfeng: YongfengConfig = field(default_factory=YongfengConfig)
     scrap: ScrapConfig = field(default_factory=ScrapConfig)
     shenglong: ShenglongConfig = field(default_factory=ShenglongConfig)
+    analysis_token: str = os.getenv("ANALYSIS_TOKEN", "")
+    analysis_api_code: str = os.getenv("ANALYSIS_API_CODE", "st2")
 
     def validate(self) -> list[str]:
         """检查配置完整性，返回缺失项列表"""
