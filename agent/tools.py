@@ -387,8 +387,59 @@ TOOLS = [
                             "required": ["ranges"],
                         },
                     },
+                    "mat_code_1": {"type": "string", "description": "料号 1，默认 12031001"},
+                    "mat_code_2": {"type": "string", "description": "料号 2，默认 12031002"},
+                    "start_time": {"type": "string", "description": "起始时间，格式 YYYY-MM-DD HH:MM:SS"},
+                    "end_time": {"type": "string", "description": "结束时间，格式 YYYY-MM-DD HH:MM:SS"},
+                    "output": {"type": "string", "description": "输出 xlsx 路径（可选）"},
+                    "verbose": {"type": "boolean", "description": "是否输出更详细日志，默认 false"},
                 },
-                "required": ["cycles"],
+                "required": ["analysis_base_url", "visual_1_base_url", "visual_2_base_url", "start_time", "end_time"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "yongfeng_export_accuracy_report",
+            "description": (
+                "【永锋烧结矿统计】生成指定日期范围的烧结矿颗粒度人工筛分 vs 视觉准确率报表。"
+                "该报表逻辑与原始脚本一致：按人工筛分样本时间对齐视觉数据，"
+                "对每条样本取 (T-4h, T] 窗口内视觉记录均值，再计算各粒径区间误差和每行 MAE，"
+                "最后导出 Excel 报表。"
+                "适用于用户说【生成 2026-04-01 到 2026-04-07 的烧结矿颗粒度准确率报表】、"
+                "【导出某一段时间的人工筛分 vs 视觉准确率】、"
+                "【做永锋烧结矿准确率统计】等指令。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_time": {
+                        "type": "string",
+                        "description": "起始时间，格式 YYYY-MM-DD HH:MM:SS",
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": "结束时间，格式 YYYY-MM-DD HH:MM:SS",
+                    },
+                    "mat_code_1": {
+                        "type": "string",
+                        "description": "料号 1，默认 12031001",
+                    },
+                    "mat_code_2": {
+                        "type": "string",
+                        "description": "料号 2，默认 12031002",
+                    },
+                    "output": {
+                        "type": "string",
+                        "description": "输出 xlsx 路径（可选）",
+                    },
+                    "verbose": {
+                        "type": "boolean",
+                        "description": "是否输出更详细日志，默认 false",
+                    },
+                },
+                "required": ["start_time", "end_time"],
             },
         },
     },

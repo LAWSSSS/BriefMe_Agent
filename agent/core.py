@@ -4,6 +4,7 @@
   1. 打包带钢卷（永锋钢铁）：走 VisionAPIClient，工具无前缀
   2. 废钢检判（镔鑫钢铁）：走 ScrapClient，工具带 scrap_ 前缀
   3. 废钢检判（盛隆钢铁）：走 ShenglongClient，工具带 shenglong_ 前缀
+  4. 烧结矿颗粒度准确率（永锋）：走 yongfeng_ 前缀或专用报表入口
 
 三个项目的 VPN 是相互独立的：
   - 打包带 VPN：由 agent/vpn_manager.py 管理（自动/手动连接）
@@ -24,6 +25,7 @@ from agent.data_fetcher import VisionAPIClient
 from agent.tools import TOOLS
 from agent.vpn_manager import VPNManager
 from config.settings import settings
+from agent.yongfeng.main import run_report as run_yongfeng_report
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +57,16 @@ def _build_system_prompt() -> str:
         "  - shenglong_get_daily_summary  /  shenglong_get_range_summary  /  shenglong_export_report\n"
         "  - shenglong_export_master_report （多周期主表：所有周期累积到一个 xlsx）\n"
         "  - shenglong_export_heavy_master_report （重废1/2/3归一化口径多周期主表）\n"
+<<<<<<< HEAD
         "  - download_shenglong_images （批量下载盛隆工厂监控图像，支持日期范围）\n"
         "    （盛隆暂不支持 PPT 生成）\n\n"
+=======
+        "    （盛隆暂不支持 PPT 生成）\n"
+        "【永锋烧结矿颗粒度准确率】工具（yongfeng_ 前缀）：\n"
+        "  - yongfeng_export_accuracy_report （指定时间范围内的人工筛分 vs 视觉准确率报表）\n"
+        "    该工具由 GLM function calling 触发；只要用户明确说【生成/导出/统计 永锋烧结矿颗粒度准确率报表】，"
+        "就应优先选择此工具。\n\n"
+>>>>>>> origin/master
         "判断用户问的是哪个项目，请严格遵守以下【路由铁律】：\n"
         "1. 用户说【打包带 / 钢卷 / 打数 / 应打数 / 已打数 / 正常 / 异常 / 未识别 / 永锋】\n"
         "   → 必须走【打包带钢卷】工具（无前缀）\n"
@@ -67,13 +77,18 @@ def _build_system_prompt() -> str:
         "4. 用户只说【废钢 / 检判 / 赛迪 / 料型 / 扣重 / 扣杂】而未指明是镔鑫还是盛隆\n"
         "   → 必须反问：『请问你问的是【镔鑫废钢】还是【盛隆废钢】？这两个是不同钢厂，数据独立。』\n"
         "   禁止自行猜测。\n"
-        "5. 打包带关键词和废钢关键词都出现 或 都没有\n"
-        "   → 反问：『请问你问的是【打包带钢卷 @ 永锋】、【废钢检判 @ 镔鑫】、还是【废钢检判 @ 盛隆】？』\n"
-        "6. 反问一次之后，根据用户回答里的关键词再决定走哪条路径；依然不明确则继续反问。\n"
+        "5. 用户说【烧结矿 / 颗粒度 / 人工筛分 / 视觉 / 准确率 / 报表】\n"
+        "   → 必须走【永锋烧结矿准确率】专用报表路径，触发 yongfeng_export_accuracy_report 工具。\n"
+        "6. 打包带关键词和废钢/烧结矿关键词都出现 或 都没有\n"
+        "   → 反问：『请问你问的是【打包带钢卷 @ 永锋】、【废钢检判 @ 镔鑫】、【废钢检判 @ 盛隆】、还是【永锋烧结矿准确率】？』\n"
+        "7. 反问一次之后，根据用户回答里的关键词再决定走哪条路径；依然不明确则继续反问。\n"
         "路由错误会引发严重现场事故，请严格遵守。\n\n"
         f"今天是{today.strftime('%Y-%m-%d')}，"
         f"昨天是{yesterday.strftime('%Y-%m-%d')}，"
         f"前天是{day_before.strftime('%Y-%m-%d')}。\n\n"
+        "=============== 永锋烧结矿准确率输出格式 ===============\n"
+        "收到永锋烧结矿准确率工具返回的数据后，直接输出结果摘要，不要编造数值。\n"
+        "若返回 xlsx_path，优先告诉用户报表已生成并给出文件路径。\n\n"
         "=============== 打包带输出格式 ===============\n"
         "收到打包带工具返回的数据后，每天一行，格式如下：\n"
         "2026年4月15日共生产390个钢卷，正常共364个，异常共26个，未识别共0个。"
@@ -428,6 +443,12 @@ class SteelCoilAgent:
                 end_date=args.get("end_date", ""),
                 output_dir=args.get("output_dir", None)
             )
+
+        if func_name == "yongfeng_export_accuracy_report":
+            return self._tool_yongfeng_export_accuracy_report(args)
+
+        if func_name == "yongfeng_export_report":
+            return self._tool_yongfeng_export_report(args)
 
         return {"error": f"未知工具: {func_name}"}
 
@@ -1023,6 +1044,7 @@ class SteelCoilAgent:
                 "Sheet3 每周期一段；Sheet1 仍保留「累计准确率/符合率」列（首期累计到当期）。"
             ),
         }
+<<<<<<< HEAD
     def _tool_download_shenglong_images(self, start_date: str, end_date: str, output_dir: str = None) -> Dict[str, Any]:
         """下载盛隆工厂监控图像并打包为 ZIP"""
         from agent.shenglong.minio_downloader import download_and_pack
@@ -1072,6 +1094,57 @@ class SteelCoilAgent:
         except Exception as e:
             logger.error(f"下载图像失败: {e}")
             return {"summary_text": f"❌ 下载失败: {e}"}
+=======
+
+    def _tool_yongfeng_export_accuracy_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        required_fields = ["start_time", "end_time"]
+        missing = [name for name in required_fields if not str(args.get(name) or "").strip()]
+        if missing:
+            return {"error": f"永锋准确率报表参数缺失: {', '.join(missing)}"}
+
+        try:
+            return run_yongfeng_report(
+                analysis_base_url=str(settings.yongfeng.analysis_base_url).strip(),
+                visual_1_base_url=str(settings.yongfeng.visual_1_base_url).strip(),
+                visual_2_base_url=str(settings.yongfeng.visual_2_base_url).strip(),
+                start_time=str(args.get("start_time")).strip(),
+                end_time=str(args.get("end_time")).strip(),
+                mat_code_1=str(args.get("mat_code_1") or "12031001").strip(),
+                mat_code_2=str(args.get("mat_code_2") or "12031002").strip(),
+                analysis_token=settings.yongfeng.analysis_token,
+                api_code=settings.yongfeng.api_code,
+                output=str(args.get("output") or "").strip() or None,
+                verbose=bool(args.get("verbose", False)),
+            )
+        except Exception as e:
+            logger.error("永锋准确率报表生成失败: %s", e)
+            return {"error": f"永锋准确率报表生成失败: {e}"}
+
+    def _tool_yongfeng_export_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        required_fields = ["analysis_base_url", "visual_1_base_url", "visual_2_base_url", "start_time", "end_time"]
+        missing = [name for name in required_fields if not str(args.get(name) or "").strip()]
+        if missing:
+            return {"error": f"永锋报表参数缺失: {', '.join(missing)}"}
+
+        try:
+            return run_yongfeng_report(
+                analysis_base_url=str(args.get("analysis_base_url")).strip(),
+                visual_1_base_url=str(args.get("visual_1_base_url")).strip(),
+                visual_2_base_url=str(args.get("visual_2_base_url")).strip(),
+                start_time=str(args.get("start_time")).strip(),
+                end_time=str(args.get("end_time")).strip(),
+                mat_code_1=str(args.get("mat_code_1") or "12031001").strip(),
+                mat_code_2=str(args.get("mat_code_2") or "12031002").strip(),
+                analysis_token=settings.yongfeng.analysis_token,
+                api_code=settings.yongfeng.api_code,
+                output=str(args.get("output") or "").strip() or None,
+                verbose=bool(args.get("verbose", False)),
+            )
+        except Exception as e:
+            logger.error("永锋报表生成失败: %s", e)
+            return {"error": f"永锋报表生成失败: {e}"}
+
+>>>>>>> origin/master
     # ------------------------------------------------------------------
     #  辅助
     # ------------------------------------------------------------------
