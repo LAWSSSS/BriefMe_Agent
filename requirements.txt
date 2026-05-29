@@ -2,6 +2,7 @@
 gradio
 zhipuai
 httpx
+requests
 python-dateutil
 openpyxl
 python-pptx

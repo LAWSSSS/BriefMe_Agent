@@ -32,6 +32,7 @@ agent = SteelCoilAgent()
 DOWNLOADS_ROOT = Path("downloads")
 SCRAP_ROOT = DOWNLOADS_ROOT / "scrap"
 SHENGLONG_ROOT = DOWNLOADS_ROOT / "shenglong"
+YONGFENG_ROOT = DOWNLOADS_ROOT / "yongfeng"
 
 
 # =====================================================================
@@ -122,14 +123,14 @@ def _is_visible_file(p: Path) -> bool:
 def _scan_latest_artifacts() -> Tuple[Optional[str], Optional[str], List[str]]:
     """返回 (最新 xlsx 路径, 最新 pptx 路径, 最近 20 张错判渲染图路径)
 
-    同时扫描镔鑫 (downloads/scrap/) 与盛隆 (downloads/shenglong/) 两个目录。
+    同时扫描镔鑫 (downloads/scrap/) 、盛隆 (downloads/shenglong/) 与永锋 (downloads/yongfeng/) 三个目录。
     pptx 仅镔鑫产出（同事 graphing skill 生成），但路径扫描合并便于复用。
-    盛隆试运行阶段不下图，所以图主要来自 scrap。
+    盛隆试运行阶段不下图，所以图主要来自 scrap；永锋主要看 Excel 报表。
 
     重点：所有结果都过滤掉 dotfile / Office 锁文件，否则 Gradio 6.x
     会以 InvalidPathError 拒绝把它们送进 gr.File / gr.Gallery。
     """
-    roots = [r for r in (SCRAP_ROOT, SHENGLONG_ROOT) if r.exists()]
+    roots = [r for r in (SCRAP_ROOT, SHENGLONG_ROOT, YONGFENG_ROOT) if r.exists()]
     if not roots:
         return None, None, []
 
@@ -199,6 +200,36 @@ def clear_chat():
     return "", [], {"vpn_state": "unknown", "messages": []}, xlsx, pptx, imgs
 
 
+def run_yongfeng_export(
+    analysis_base_url: str,
+    visual_1_base_url: str,
+    visual_2_base_url: str,
+    start_time: str,
+    end_time: str,
+    mat_code_1: str,
+    mat_code_2: str,
+    output: str,
+    verbose: bool,
+):
+    result = agent._tool_yongfeng_export_report(
+        {
+            "analysis_base_url": analysis_base_url,
+            "visual_1_base_url": visual_1_base_url,
+            "visual_2_base_url": visual_2_base_url,
+            "start_time": start_time,
+            "end_time": end_time,
+            "mat_code_1": mat_code_1,
+            "mat_code_2": mat_code_2,
+            "analysis_token": settings.yongfeng.analysis_token,
+            "api_code": settings.yongfeng.api_code,
+            "output": output,
+            "verbose": verbose,
+        }
+    )
+    xlsx, pptx, imgs = _scan_latest_artifacts()
+    return result, xlsx, pptx, imgs
+
+
 # =====================================================================
 # 快捷 prompt（档位 4）—— 点按钮填入输入框，由用户二次回车发送
 # =====================================================================
@@ -211,7 +242,15 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             "打包带钢卷": {
                 "昨日打包带情况": "发昨天的打包带情况",
                 "下载昨日打包带异常图": "下载昨天打包带的异常图片",
-            }
+            },
+            "烧结矿颗粒度": {
+                "昨日准确率报表": f"生成 {yesterday} 的烧结矿颗粒度人工筛分 vs 视觉准确率报表",
+                "指定区间准确率报表": "生成 2026-04-01 到 2026-04-07 的烧结矿颗粒度人工筛分 vs 视觉准确率报表",
+                "支持哪些指令": (
+                    "请列出你支持的所有功能和典型用法示例。"
+                    "分【打包带钢卷 @ 永锋】【烧结矿颗粒度 @ 永锋】【废钢检判 @ 镔鑫】【废钢检判 @ 盛隆】四节回答。"
+                ),
+            },
         },
         "镔鑫钢铁": {
             "废钢检判": {
@@ -538,6 +577,11 @@ def build_ui() -> gr.Blocks:
                     '<div class="proj-card">'
                     '  <div class="proj-row">'
                     '    <span class="proj-tag pt">打包带钢卷</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">永锋钢铁</span>'
+                    '  </div>'
+                    '  <div class="proj-row">'
+                    '    <span class="proj-tag pt">烧结矿颗粒度</span>'
                     '    <span class="proj-arrow">→</span>'
                     '    <span class="proj-site">永锋钢铁</span>'
                     '  </div>'
