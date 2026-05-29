@@ -432,14 +432,6 @@ class SteelCoilAgent:
                 args.get("cycles") or [],
                 heavy_normalized=True,
             )
-        
-                # 盛隆图像下载工具
-        if func_name == "download_shenglong_images":
-            return self._tool_download_shenglong_images(
-                start_date=args.get("start_date", ""),
-                end_date=args.get("end_date", ""),
-                output_dir=args.get("output_dir", None)
-            )
 
         if func_name == "yongfeng_export_accuracy_report":
             return self._tool_yongfeng_export_accuracy_report(args)
