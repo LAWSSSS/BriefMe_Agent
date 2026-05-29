@@ -144,6 +144,66 @@ def download_images_by_date_range(
         "dates": dates_processed,
     }
 
+def _download_single_date(
+    client: Minio,
+    target_date,
+    output_dir: Path,
+    pbar: tqdm = None,
+    expected_count: int = 0
+) -> Tuple[int, int]:
+    """下载单个日期的所有图像"""
+    prefix = f"{PREFIX_BASE}/{target_date.isoformat()}/"
+    date_dir = output_dir / target_date.isoformat()
+    date_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        objects = list(client.list_objects(BUCKET, prefix=prefix, recursive=True))
+        files = [o for o in objects if o.size and o.size > 0]
+    except Exception as e:
+        log.error(f"列出对象失败: {e}")
+        return 0, 0
+
+    if not files:
+        log.warning(f"日期 {target_date} 没有找到文件")
+        return 0, 0
+
+    success = 0
+    failed = 0
+    use_sub_pbar = pbar is None and expected_count > 0
+    
+    if use_sub_pbar:
+        sub_pbar = tqdm(total=expected_count, desc=f"下载 {target_date}", unit="张", leave=False)
+    
+    for idx, obj in enumerate(files, 1):
+        filename = Path(obj.object_name).name
+        local_path = date_dir / filename
+
+        if local_path.exists() and local_path.stat().st_size == obj.size:
+            log.debug(f"[{target_date}] 已存在，跳过: {filename}")
+            success += 1
+            if pbar:
+                pbar.update(1)
+            elif use_sub_pbar:
+                sub_pbar.update(1)
+            continue
+
+        try:
+            client.fget_object(BUCKET, obj.object_name, str(local_path))
+            success += 1
+            log.debug(f"[{target_date}] {idx}/{len(files)} 下载完成: {filename}")
+        except Exception as e:
+            failed += 1
+            log.error(f"[{target_date}] 下载失败 {filename}: {e}")
+        
+        if pbar:
+            pbar.update(1)
+        elif use_sub_pbar:
+            sub_pbar.update(1)
+
+    if use_sub_pbar:
+        sub_pbar.close()
+
+    return success, failed
 
 def write_log(message: str):
     """写入日志到文件"""
