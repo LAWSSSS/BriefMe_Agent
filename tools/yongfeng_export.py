@@ -22,8 +22,8 @@ from config.settings import settings
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="永锋烧结矿准确率报表导出")
-    parser.add_argument("--start", required=True, help="起始时间 YYYY-MM-DD HH:MM:SS")
-    parser.add_argument("--end", required=True, help="结束时间 YYYY-MM-DD HH:MM:SS")
+    parser.add_argument("--start", nargs="+", required=True, help="起始时间 YYYY-MM-DD HH:MM:SS（不加引号也可）")
+    parser.add_argument("--end", nargs="+", required=True, help="结束时间 YYYY-MM-DD HH:MM:SS（不加引号也可）")
     parser.add_argument("--mat-code-1", default="12031001", help="1# 物料编码")
     parser.add_argument("--mat-code-2", default="12031002", help="2# 物料编码")
     parser.add_argument("--output", help="Excel 输出路径（默认写入 downloads/yongfeng/）")
@@ -35,12 +35,15 @@ def main() -> int:
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
 
+    start_time = " ".join(args.start).strip()
+    end_time = " ".join(args.end).strip()
+
     result = run_report(
         analysis_base_url=str(settings.yongfeng.analysis_base_url).strip(),
         visual_1_base_url=str(settings.yongfeng.visual_1_base_url).strip(),
         visual_2_base_url=str(settings.yongfeng.visual_2_base_url).strip(),
-        start_time=args.start,
-        end_time=args.end,
+        start_time=start_time,
+        end_time=end_time,
         mat_code_1=args.mat_code_1,
         mat_code_2=args.mat_code_2,
         analysis_token=settings.yongfeng.analysis_token,
