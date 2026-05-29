@@ -92,6 +92,9 @@ python app.py
 不开页面也可以运行 CLI，适合后台批量导出或排查问题：
 
 ```bash
+# 导出永锋烧结矿准确率报表
+python tools/yongfeng_export.py --start 2026-05-15 00:00:00 --end 2026-05-21 23:59:59
+
 # 导出镔鑫区间报表 (不带错判图)
 python tools/scrap_export.py --start 2026-04-22 --end 2026-04-28 --no-images
 
