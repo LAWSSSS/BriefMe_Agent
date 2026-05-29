@@ -24,9 +24,9 @@ BriefMe 是一个为工业现场量身定制的数据统计交互智能体。
 
 ### 1. 永锋钢铁 · 烧结矿颗粒度 📦
 * **功能**：生成人工筛分 vs 视觉准确率报表，按日对齐并计算各粒径误差 / MAE，导出 Excel 结果。
-* **数据规则**：人工数据按 `inspectResult=Y` 保留；视觉 1# / 2# 对应指定站点与页面路径，取 `(T-4h, T]` 的视觉窗口后计算均值。
+* **数据规则**：人工数据按 `inspectResult=Y` 保留；视觉 1# / 2# 的站点与页面路径已固化在 `config/settings.py`，计算时按 `(T-4h, T]` 取视觉窗口后求均值。
 * **输出目录**：JSON 中间结果写入 `agent/yongfeng/output/`，Excel 报表默认输出到 `downloads/yongfeng/`。
-* **网络前置**：需连接永锋专网并保证视觉 / 人工系统可访问。
+* **使用方式**：优先通过 `tools/yongfeng_export.py` 导出，避免在文档里重复维护一堆网址。
 
 ### 2. 镔鑫钢铁 · 废钢检判 ♻️
 * **功能**：生成单日/区间文本汇总、报表，下载错判图，**自动生成包含趋势图与 KPI 的汇报 PPT**。
@@ -46,8 +46,8 @@ BriefMe 是一个为工业现场量身定制的数据统计交互智能体。
 ### 1. 克隆项目与配置环境
 强烈建议使用纯净的虚拟环境隔离依赖：
 ```bash
-git clone [https://github.com/你的用户名/Autoagent1.git](https://github.com/你的用户名/Autoagent1.git)
-cd Autoagent1
+git clone https://github.com/LAWSSSS/BriefMe_Agent.git
+cd BriefMe_Agent
 
 # 创建并激活虚拟环境
 python -m venv venv
@@ -92,6 +92,9 @@ python app.py
 不开页面也可以运行 CLI，适合后台批量导出或排查问题：
 
 ```bash
+# 导出永锋烧结矿准确率报表（URL 配置统一写在 config/settings.py）
+python tools/yongfeng_export.py --start 2026-05-15 00:00:00 --end 2026-05-15 23:59:59
+
 # 导出镔鑫区间报表 (不带错判图)
 python tools/scrap_export.py --start 2026-04-22 --end 2026-04-28 --no-images
 
@@ -117,10 +120,11 @@ agent智能体大赛/
 │   ├── tools.py                   # 给大模型看的 Function Calling Schema
 │   ├── data_fetcher.py            # 永锋打包带取数与异常处理
 │   ├── scrap/                     # 📦 镔鑫废钢子包 (含 API 解析、业务统计、PPT 生成)
-│   └── shenglong/                 # 📦 盛隆废钢子包 (含 API 解析、黑名单过滤、复杂口径聚合)
+│   ├── shenglong/                 # 📦 盛隆废钢子包 (含 API 解析、黑名单过滤、复杂口径聚合)
+│   └── yongfeng/                  # 📦 永锋烧结矿子包（含API解析、数据计算、报表输出）
 ├── tools/                         # CLI 批量导出工具脚本
 ├── tests/                         # 单元测试与业务逻辑断言
-└── downloads/                     # 自动生成的报表、图片产物目录 (请勿在此手写业务依赖)
+└── downloads/                     # 自动生成的报表、图片产物目录
 ```
 
 ## 🧑‍💻 开发者交接与协同规范 (Git Workflow)
