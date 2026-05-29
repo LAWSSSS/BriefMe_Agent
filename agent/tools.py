@@ -443,4 +443,30 @@ TOOLS = [
             },
         },
     },
+        # 盛隆图像下载工具
+    {
+        "type": "function",
+        "function": {
+            "name": "download_shenglong_images",
+            "description": "从盛隆工厂的MinIO服务器批量下载指定日期范围内的监控图像。用于获取废钢检判的现场监控图片。下载前请确保VPN已连接。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": "起始日期，格式 YYYY-MM-DD，例如 2026-05-01"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "结束日期，格式 YYYY-MM-DD，例如 2026-05-07"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "可选，保存图像的目录路径，默认是 ./shenglong_images/"
+                    }
+                },
+                "required": ["start_date", "end_date"]
+            }
+        }
+    },
 ]

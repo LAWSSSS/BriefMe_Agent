@@ -39,15 +39,16 @@ def _build_system_prompt() -> str:
     return (
         "你是 BriefMe，中冶赛迪（重庆）信息技术有限公司内部使用的多场景数据统计智能助手，"
         "帮助员工完成各业务场景下的数据每日/周期统计汇总与报表生成工作。"
-        "当前已接入以下三个项目（分别部署于不同钢厂现场）：\n"
+        "当前已接入以下四个项目（分别部署于不同钢厂现场）：\n"
         "  【打包带钢卷】视觉检测统计 · 部署于 **永锋钢铁** 现场\n"
         "  【废钢检判】赛迪 AI 检判 vs 人工检判对比统计 · 部署于 **镔鑫钢铁** 现场\n"
         "  【废钢检判】赛迪 AI 检判 vs 人工检判对比统计 · 部署于 **盛隆钢铁** 现场\n"
-        "注意：三个项目数据来源完全独立（不同的钢厂/不同的 VPN/不同的视觉系统），"
+        "  【烧结矿颗粒度准确率】赛迪视觉 vs 人工筛分对比统计 · 部署于 **永锋钢铁** 现场\n"
+        "注意：四个项目数据来源完全独立（不同的钢厂/不同的 VPN/不同的视觉系统），"
         "严禁把一个钢厂的数据混到另一个里。\n"
         "当用户询问数据时，必须调用工具，绝对不要编造数据。\n\n"
         "=============== 严格路由规则（现场演示防误判）===============\n"
-        "工具分三类：\n"
+        "工具分四类：\n"
         "【打包带钢卷】工具（无前缀）：\n"
         "  - get_daily_stats  /  get_date_range_stats  /  download_abnormal_images\n"
         "【镔鑫废钢检判】工具（scrap_ 前缀）：\n"
@@ -57,13 +58,14 @@ def _build_system_prompt() -> str:
         "  - shenglong_get_daily_summary  /  shenglong_get_range_summary  /  shenglong_export_report\n"
         "  - shenglong_export_master_report （多周期主表：所有周期累积到一个 xlsx）\n"
         "  - shenglong_export_heavy_master_report （重废1/2/3归一化口径多周期主表）\n"
-        "    （盛隆暂不支持 PPT 生成）\n"
+        "  - download_shenglong_images （批量下载盛隆工厂监控图像，支持日期范围）\n"
+        "    （盛隆暂不支持 PPT 生成）\n\n"
         "【永锋烧结矿颗粒度准确率】工具（yongfeng_ 前缀）：\n"
         "  - yongfeng_export_accuracy_report （指定时间范围内的人工筛分 vs 视觉准确率报表）\n"
         "    该工具由 GLM function calling 触发；只要用户明确说【生成/导出/统计 永锋烧结矿颗粒度准确率报表】，"
-        "就应优先选择此工具。\n\n"
+        "    就应优先选择此工具。\n\n"
         "判断用户问的是哪个项目，请严格遵守以下【路由铁律】：\n"
-        "1. 用户说【打包带 / 钢卷 / 打数 / 应打数 / 已打数 / 正常 / 异常 / 未识别 / 永锋】\n"
+        "1. 用户说【打包带 / 钢卷 / 打数 / 应打数 / 已打数 / 正常 / 异常 / 未识别 / 永锋打包带】\n"
         "   → 必须走【打包带钢卷】工具（无前缀）\n"
         "2. 用户说【镔鑫 / 镔鑫废钢 / 镔鑫钢铁】\n"
         "   → 仅走 scrap_* 工具（镔鑫废钢检判）\n"
@@ -72,7 +74,7 @@ def _build_system_prompt() -> str:
         "4. 用户只说【废钢 / 检判 / 赛迪 / 料型 / 扣重 / 扣杂】而未指明是镔鑫还是盛隆\n"
         "   → 必须反问：『请问你问的是【镔鑫废钢】还是【盛隆废钢】？这两个是不同钢厂，数据独立。』\n"
         "   禁止自行猜测。\n"
-        "5. 用户说【烧结矿 / 颗粒度 / 人工筛分 / 视觉 / 准确率 / 报表】\n"
+        "5. 用户说【烧结矿 / 颗粒度 / 人工筛分 / 视觉 / 准确率 / 报表 / 永锋准确率】\n"
         "   → 必须走【永锋烧结矿准确率】专用报表路径，触发 yongfeng_export_accuracy_report 工具。\n"
         "6. 打包带关键词和废钢/烧结矿关键词都出现 或 都没有\n"
         "   → 反问：『请问你问的是【打包带钢卷 @ 永锋】、【废钢检判 @ 镔鑫】、【废钢检判 @ 盛隆】、还是【永锋烧结矿准确率】？』\n"
@@ -142,7 +144,7 @@ def _build_system_prompt() -> str:
         "  第 3 行：内含可编辑趋势图 + 任务判断 / 图表结构 / 关键观察 / 使用建议四个文字面板。\n"
         "禁止在路径前后加任何符号；禁止说『<pptx_path>』『路径见下方』之类的话。\n\n"
         "必须用工具返回的真实数字填充，不要输出 XXX 占位符。\n"
-        "如果用户的问题与以上三个项目都无关，友好简洁地回答即可。"
+        "如果用户的问题与以上四个项目都无关，友好简洁地回答即可。"
     )
 
 
@@ -298,8 +300,9 @@ class SteelCoilAgent:
             return reply, session
 
         tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
+        # 盛隆图像下载工具不需要检查永锋 VPN
         any_packing_tool = any(
-            not n.startswith("scrap_") and not n.startswith("shenglong_")
+            not n.startswith("scrap_") and not n.startswith("shenglong_") and n != "download_shenglong_images"
             for n in tool_names
         )
 
@@ -367,8 +370,14 @@ class SteelCoilAgent:
                 args.get("start_date", ""), args.get("end_date", "")
             )
 
-        if func_name == "download_abnormal_images":
-            return self._tool_download_abnormal_images(args.get("date", ""))
+                # 盛隆图像下载工具
+        if func_name == "download_shenglong_images":
+            result_str = self._tool_download_shenglong_images(
+                start_date=args.get("start_date", ""),
+                end_date=args.get("end_date", ""),
+                output_dir=args.get("output_dir", None)
+            )
+            return {"summary_text": result_str}
 
         # =====================================================
         # 废钢工具分支
@@ -422,6 +431,14 @@ class SteelCoilAgent:
             return self._tool_shenglong_export_master(
                 args.get("cycles") or [],
                 heavy_normalized=True,
+            )
+        
+                # 盛隆图像下载工具
+        if func_name == "download_shenglong_images":
+            return self._tool_download_shenglong_images(
+                start_date=args.get("start_date", ""),
+                end_date=args.get("end_date", ""),
+                output_dir=args.get("output_dir", None)
             )
 
         if func_name == "yongfeng_export_accuracy_report":
@@ -1025,6 +1042,57 @@ class SteelCoilAgent:
             ),
         }
 
+    def _tool_download_shenglong_images(self, start_date: str, end_date: str, output_dir: str = None) -> Dict[str, Any]:
+        """下载盛隆工厂监控图像并打包为 ZIP"""
+        from agent.shenglong.minio_downloader import download_and_pack
+        from datetime import datetime, timedelta
+        from minio import Minio
+        from pathlib import Path
+        
+        try:
+            # 获取文件总数（用于显示）
+            start = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+            
+            from agent.shenglong.minio_downloader import MINIO_HOST, MINIO_API_PORT, BUCKET, PREFIX_BASE, ACCESS_KEY, SECRET_KEY
+            
+            client = Minio(
+                f"{MINIO_HOST}:{MINIO_API_PORT}",
+                access_key=ACCESS_KEY,
+                secret_key=SECRET_KEY,
+                secure=False,
+            )
+            
+            total_files = 0
+            current = start
+            while current <= end:
+                prefix = f"{PREFIX_BASE}/{current.isoformat()}/"
+                try:
+                    objects = list(client.list_objects(BUCKET, prefix=prefix, recursive=True))
+                    files = [o for o in objects if o.size and o.size > 0]
+                    total_files += len(files)
+                except:
+                    pass
+                current += timedelta(days=1)
+            
+            start_msg = f"📥 正在下载 {start_date} 到 {end_date} 的监控图像，共 {total_files} 个文件\n\n点击「📋 下载实时日志」面板中的「🔄 手动刷新日志」按钮查看下载进度。\n\n下载完成后我会通知你，并提供 ZIP 下载链接。"
+            
+            zip_path, success, failed = download_and_pack(start_date, end_date)
+            
+            if zip_path is None:
+                return {"summary_text": f"❌ 下载失败：没有找到文件"}
+            
+            final_msg = f"\n\n✅ 下载完成！成功 {success} 个文件，失败 {failed} 个\n\n点击下方按钮下载 ZIP 文件到本地。"
+            
+            return {
+                "summary_text": start_msg + final_msg,
+                "zip_file": zip_path
+            }
+        except Exception as e:
+            logger.error(f"下载图像失败: {e}")
+            return {"summary_text": f"❌ 下载失败: {e}"}
+
+
     def _tool_yongfeng_export_accuracy_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
         required_fields = ["start_time", "end_time"]
         missing = [name for name in required_fields if not str(args.get(name) or "").strip()]
@@ -1072,6 +1140,7 @@ class SteelCoilAgent:
         except Exception as e:
             logger.error("永锋报表生成失败: %s", e)
             return {"error": f"永锋报表生成失败: {e}"}
+
 
     # ------------------------------------------------------------------
     #  辅助
