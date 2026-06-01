@@ -698,7 +698,7 @@ def build_ui() -> gr.Blocks:
                 current += timedelta(days=1)
             
             # 添加用户消息
-            history.append({"role": "user", "content": message})
+            # history.append({"role": "user", "content": message})
             
             # 立即返回提示消息
             start_msg = f"📥 正在下载 {start_date} 到 {end_date} 的监控图像，共 {total_files} 个文件\n\n点击「📋 下载实时日志」面板中的「🔄 手动刷新日志」按钮查看下载进度。\n\n下载完成后我会通知你。"
@@ -730,7 +730,7 @@ def build_ui() -> gr.Blocks:
                 return history, session, xlsx, pptx, imgs, None
 
             # 添加用户消息
-            history.append({"role": "user", "content": user_message})
+            # history.append({"role": "user", "content": user_message})
             
             # 调用 Agent
             reply, session = agent.chat(user_message, session)
@@ -755,21 +755,25 @@ def build_ui() -> gr.Blocks:
             
             # 判断是否是下载指令
             if "下载盛隆工厂" in user_message and "监控图像" in user_message:
-                return download_handler(user_message, history, session)
+                # 下载功能：使用生成器模式
+                for result in download_handler(user_message, history, session):
+                    yield result
             else:
-                return normal_handler(user_message, history, session)
+                # 其他功能：普通模式
+                result = normal_handler(user_message, history, session)
+                yield result
 
         # 绑定
-        msg.submit(
-            _sync_append, 
-            inputs=[msg, chatbot], 
-            outputs=[msg, chatbot], 
-            queue=False
-        ).then(
-            route_handler,
-            inputs=[msg, chatbot, session],
-            outputs=[chatbot, session, report_file, pptx_file, gallery, download_zip_file],
-        )
+        # msg.submit(
+        #     _sync_append, 
+        #     inputs=[msg, chatbot], 
+        #     outputs=[msg, chatbot], 
+        #     queue=False
+        # ).then(
+        #     route_handler,
+        #     inputs=[msg, chatbot, session],
+        #     outputs=[chatbot, session, report_file, pptx_file, gallery, download_zip_file],
+        # )
         
         submit_btn.click(
             _sync_append,
