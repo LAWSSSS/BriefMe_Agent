@@ -173,6 +173,33 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "scrap_weekly_type_stats",
+            "description": (
+                "【废钢检判项目 · 仅镔鑫】统计镔鑫废钢指定日期范围内各主料型"
+                "（精炉料1/2/3、重废、中废、杂模等）的周度检判数据，仅统计赛迪系统数据，"
+                "生成 Excel 报表。同时返回赛迪对比汇总文本。"
+                "适用场景：用户说"
+                "【各料型统计 / 料型周报 / 分料型 / 周度料型 / 料型对比 / 料型统计+汇报】等指令时使用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": "起始日期，格式 YYYY-MM-DD",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "结束日期，格式 YYYY-MM-DD",
+                    },
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+    },
     # =========================================================
     # 盛隆废钢检判系统（shenglong_ 前缀）- 与镔鑫/打包带完全隔离
     # 部署于盛隆钢铁现场，人工检判为 3 人平均

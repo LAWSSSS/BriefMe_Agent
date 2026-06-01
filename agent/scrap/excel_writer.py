@@ -231,3 +231,180 @@ def write_stats_xlsx(
     wb.save(save_path)
     logger.info("xlsx 已保存: %s", save_path)
     return save_path
+
+
+WEEKLY_TYPE_HEADERS = [
+    "数据源", "开始日期", "统计日期", "主料型",
+    "车数", "主料型准确数量",
+    "主料型占比差异（<10%）数量", "扣重误差+-100KG数量",
+    "主料型准确率", "主料型占比准确率（误差<=10%）",
+    "平均扣重误差KG（误差<=100KG）", "扣杂误差+-100KG准确率",
+    "扣杂误差占比0.5~1.5",
+]
+
+
+def _norm_pct(v: float) -> float:
+    if abs(v) < 1.0 and v != 0.0:
+        return v * 100.0
+    return v
+
+
+def _fmt_pct_or_dash(v: Optional[float]) -> str:
+    if v is None:
+        return "-"
+    return f"{_norm_pct(v):.2f}%"
+
+
+def _fmt_num_or_dash(v: Optional[float], digits: int = 2) -> str:
+    if v is None:
+        return "-"
+    formatted = f"{v:.{digits}f}"
+    if "." in formatted:
+        formatted = formatted.rstrip("0").rstrip(".")
+    return formatted
+
+
+def _fmt_date_for_excel(date_str: str) -> str:
+    parts = date_str.split("-")
+    return f"{parts[0]}/{int(parts[1])}/{int(parts[2])}"
+
+
+def _write_weekly_summary(
+    ws, row: int, label: str,
+    truck_count: int,
+    main_same_count: int,
+    ratio_10pct_count: int,
+    weight_100kg_count: int,
+    main_same_pct: Optional[float],
+    ratio_10pct_pct: Optional[float],
+    avg_weight_diff_kg: Optional[float],
+    weight_100kg_pct: Optional[float],
+    deduct_ratio: Optional[float],
+) -> None:
+    vals = [
+        "",
+        "",
+        "",
+        label,
+        truck_count if truck_count > 0 else "",
+        main_same_count,
+        ratio_10pct_count,
+        weight_100kg_count,
+        _fmt_pct_or_dash(main_same_pct),
+        _fmt_pct_or_dash(ratio_10pct_pct),
+        _fmt_num_or_dash(avg_weight_diff_kg),
+        _fmt_pct_or_dash(weight_100kg_pct),
+        _fmt_num_or_dash(deduct_ratio),
+    ]
+    for col_idx, val in enumerate(vals, start=1):
+        c = ws.cell(row=row, column=col_idx, value=val)
+        c.alignment = CENTER
+        c.border = BORDER
+        c.font = Font(bold=True)
+
+
+def write_weekly_type_xlsx(
+    report,
+    save_path: Path,
+) -> Path:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "周度料型统计"
+
+    start_display = _fmt_date_for_excel(report.start_date)
+    end_display = _fmt_date_for_excel(report.end_date)
+
+    title = f"镔鑫料型统计_{report.start_date}_{report.end_date}"
+    ncols = len(WEEKLY_TYPE_HEADERS)
+    ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=14)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    ws.cell(row=1, column=1).alignment = CENTER
+
+    header_row = 3
+    for col_idx, val in enumerate(WEEKLY_TYPE_HEADERS, start=1):
+        c = ws.cell(row=header_row, column=col_idx, value=val)
+        c.font = Font(bold=True, size=11)
+        c.alignment = CENTER
+        c.border = BORDER
+        c.fill = FILL_HEADER
+
+    row = header_row + 1
+    first_data_row = row
+
+    for idx, r in enumerate(report.rows):
+        has_eligible = r.main_accuracy_pct is not None
+        is_first = (idx == 0)
+        vals = [
+            "赛迪" if is_first else "",
+            start_display if is_first else "",
+            end_display if is_first else "",
+            r.material_name,
+            r.truck_count if r.truck_count > 0 else "",
+            r.main_correct_count if has_eligible else "",
+            r.ratio_within_10pct_count if has_eligible else "",
+            r.weight_within_100kg_count if has_eligible else "",
+            _fmt_pct_or_dash(r.main_accuracy_pct) if has_eligible else "",
+            _fmt_pct_or_dash(r.ratio_accuracy_pct) if has_eligible else "",
+            _fmt_num_or_dash(r.avg_weight_diff_kg) if has_eligible else "",
+            _fmt_pct_or_dash(r.weight_accuracy_pct) if has_eligible else "",
+            _fmt_num_or_dash(r.deduct_ratio) if has_eligible else "",
+        ]
+        for col_idx, val in enumerate(vals, start=1):
+            c = ws.cell(row=row, column=col_idx, value=val)
+            c.alignment = CENTER
+            c.border = BORDER
+        row += 1
+
+    last_data_row = row - 1
+    if last_data_row > first_data_row:
+        for col in (1, 2, 3):
+            ws.merge_cells(
+                start_row=first_data_row, start_column=col,
+                end_row=last_data_row, end_column=col,
+            )
+
+    _write_weekly_summary(ws, row, "整体",
+        report.overall_truck_count,
+        report.overall_main_same_count,
+        report.overall_ratio_within_10pct_count,
+        report.overall_weight_within_100kg_count,
+        report.overall_main_same_pct,
+        report.overall_ratio_within_10pct_pct,
+        report.overall_avg_weight_diff_kg,
+        report.overall_weight_within_100kg_count / report.overall_truck_count * 100.0
+        if report.overall_truck_count > 0 else None,
+        report.overall_deduct_ratio,
+    )
+    row += 1
+
+    _write_weekly_summary(ws, row, "整体（不含中废、杂模）",
+        report.no_exclude_truck_count,
+        report.no_exclude_main_same_count,
+        report.no_exclude_ratio_within_10pct_count,
+        report.no_exclude_weight_within_100kg_count,
+        report.no_exclude_main_same_pct,
+        report.no_exclude_ratio_within_10pct_pct,
+        report.no_exclude_avg_weight_diff_kg,
+        report.no_exclude_weight_within_100kg_count / report.no_exclude_truck_count * 100.0
+        if report.no_exclude_truck_count > 0 else None,
+        report.no_exclude_deduct_ratio,
+    )
+
+    max_material_len = max(
+        (len(r.material_name) for r in report.rows), default=4
+    )
+    col4_width = max(14, max_material_len * 2 + 2)
+
+    widths = [12, 12, 12, col4_width, 8, 14, 18, 16, 14, 18, 18, 16, 16]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    for r in range(first_data_row, row + 1):
+        ws.row_dimensions[r].height = 22
+
+    ws.freeze_panes = ws.cell(row=first_data_row, column=1)
+
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(save_path)
+    logger.info("周度料型 xlsx 已保存: %s", save_path)
+    return save_path
