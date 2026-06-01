@@ -30,6 +30,54 @@ from agent.yongfeng.main import run_report as run_yongfeng_report
 logger = logging.getLogger(__name__)
 
 
+def _fmt_date_short(date_str: str) -> str:
+    parts = date_str.split("-")
+    return f"{parts[0]}.{int(parts[1])}.{int(parts[2])}"
+
+
+def _norm_pct(v: float) -> float:
+    if abs(v) < 1.0 and v != 0.0:
+        return v * 100.0
+    return v
+
+
+def _build_weekly_summary(report, start_date: str, end_date: str) -> str:
+    sd = _fmt_date_short(start_date)
+    ed = _fmt_date_short(end_date)
+
+    sc = report.no_exclude_truck_count
+    sc_acc = (
+        f"{_norm_pct(report.no_exclude_main_same_pct):.2f}%"
+        if report.no_exclude_main_same_pct is not None
+        else "N/A"
+    )
+    sc_correct = report.no_exclude_main_same_count
+    sc_ratio = (
+        f"{_norm_pct(report.no_exclude_ratio_within_10pct_pct):.2f}%"
+        if report.no_exclude_ratio_within_10pct_pct is not None
+        else "N/A"
+    )
+    sc_wd = (
+        f"{report.no_exclude_avg_weight_diff_kg:.2f}Kg"
+        if report.no_exclude_avg_weight_diff_kg is not None
+        else "N/A"
+    )
+    sc_dr = (
+        f"{report.no_exclude_deduct_ratio:.2f}"
+        if report.no_exclude_deduct_ratio is not None
+        else "N/A"
+    )
+
+    return (
+        f"{sd}-{ed}\n"
+        f"赛迪（不含中废、杂模）共检判{sc}车；\n"
+        f"1，主料型准确率：赛迪 {sc_acc}（正确{sc_correct}辆）；\n"
+        f"2，料型占比准确率（误差≤10%）：赛迪 {sc_ratio}；\n"
+        f"4，平均扣重误差 KG（误差≤100KG）：赛迪{sc_wd}；\n"
+        f"扣杂误差占比 0.5~1.5：赛迪 {sc_dr}；"
+    )
+
+
 def _build_system_prompt() -> str:
     """根据当前日期动态生成系统提示词"""
     today = date.today()
@@ -54,6 +102,8 @@ def _build_system_prompt() -> str:
         "【镔鑫废钢检判】工具（scrap_ 前缀）：\n"
         "  - scrap_get_daily_summary  /  scrap_get_range_summary  /  scrap_export_report  /  scrap_export_ppt\n"
         "    （scrap_export_ppt 仅镔鑫支持，生成单页趋势图 PowerPoint）\n"
+        "  - scrap_weekly_type_stats "
+        "（仅镔鑫支持，按主料型分组的周度料型统计报表，含赛迪汇总文本）\n"
         "【盛隆废钢检判】工具（shenglong_ 前缀）：\n"
         "  - shenglong_get_daily_summary  /  shenglong_get_range_summary  /  shenglong_export_report\n"
         "  - shenglong_export_master_report （多周期主表：所有周期累积到一个 xlsx）\n"
@@ -69,6 +119,8 @@ def _build_system_prompt() -> str:
         "   → 必须走【打包带钢卷】工具（无前缀）\n"
         "2. 用户说【镔鑫 / 镔鑫废钢 / 镔鑫钢铁】\n"
         "   → 仅走 scrap_* 工具（镔鑫废钢检判）\n"
+        "   其中：【各料型统计 / 料型周报 / 分料型 / 周度料型 / 料型对比 / 料型统计+汇报 / 镔鑫各料型】\n"
+        "   等要求按料型分组统计时，必须调用 scrap_weekly_type_stats。\n"
         "3. 用户说【盛隆 / 盛隆废钢 / 盛隆钢铁】\n"
         "   → 仅走 shenglong_* 工具（盛隆废钢检判）\n"
         "4. 用户只说【废钢 / 检判 / 赛迪 / 料型 / 扣重 / 扣杂】而未指明是镔鑫还是盛隆\n"
@@ -97,6 +149,16 @@ def _build_system_prompt() -> str:
         "summary_text 字段，不要改写。回复前先标明是哪个钢厂（镔鑫 / 盛隆）。\n"
         "若用户要求导出表格/图片，工具会返回 xlsx_path 和 downloaded_images 路径，"
         "把这两个路径直接告诉用户并简要说明即可。\n\n"
+        "=============== 镔鑫各料型统计+汇报 ===============\n"
+        "用户在镔鑫场景下明确说【各料型统计 / 料型周报 / 分料型 / 周度料型 / 料型对比 / "
+        "料型统计+汇报 / 近7天各料型 / 镔鑫各料型统计+汇报】等时，调用 "
+        "scrap_weekly_type_stats。"
+        "工具返回 weekly_xlsx_path（周度料型统计 xlsx）与 weekly_summary_text（赛迪汇总文本）。"
+        "回复模板：\n"
+        "  先把 weekly_summary_text 字段值原样粘贴作为【总结文字】\n"
+        "  再另起一段告知：\n"
+        "  ✅ 已生成镔鑫各料型统计报表：<原样粘贴 weekly_xlsx_path>\n"
+        "  注意：不要额外输出赛迪废钢判级结果，只保留周度料型统计结果表和总结文字。\n\n"
         "=============== 盛隆多周期主表 ===============\n"
         "用户在盛隆场景下说【主表 / 总表 / 历史主表 / 全部周期一起 / 把所有周期累积起来 / "
         "从 X 看到 Y / 一张表看到所有周期】等指令时，调用 "
@@ -403,6 +465,12 @@ class SteelCoilAgent:
                 args.get("end_date", ""),
             )
 
+        if func_name == "scrap_weekly_type_stats":
+            return self._tool_scrap_weekly_type(
+                args.get("start_date", ""),
+                args.get("end_date", ""),
+            )
+
         # =====================================================
         # 盛隆废钢工具分支
         # =====================================================
@@ -699,6 +767,56 @@ class SteelCoilAgent:
                 "已生成单页 PowerPoint 趋势图，含可编辑图表 + 任务判断 / 图表结构 / "
                 "关键观察 / 使用建议四个文字面板。直接打开 .pptx 文件即可演示。"
             ),
+        }
+
+    def _tool_scrap_weekly_type(self, start_date: str, end_date: str) -> Dict[str, Any]:
+        from agent.scrap.calculator import calc_weekly_type_stats
+        from agent.scrap.excel_writer import write_weekly_type_xlsx
+
+        try:
+            stats_list = self.scrap_client.build_range_stats(start_date, end_date)
+        except Exception as e:
+            logger.error("废钢周报料型统计取数失败: %s", e)
+            return {"error": f"废钢数据获取失败: {e}"}
+
+        all_trucks = []
+        for day in stats_list:
+            all_trucks.extend(day.trucks)
+
+        saidi_report = calc_weekly_type_stats(
+            all_trucks, start_date, end_date, source_filter=1,
+        )
+
+        summary = _build_weekly_summary(saidi_report, start_date, end_date)
+
+        if start_date == end_date:
+            out_root = Path("downloads/scrap") / start_date
+            weekly_xlsx_name = f"镔鑫料型统计_{start_date}.xlsx"
+        else:
+            out_root = Path("downloads/scrap") / f"{start_date}_{end_date}"
+            weekly_xlsx_name = f"镔鑫料型统计_{start_date}_{end_date}.xlsx"
+        out_root.mkdir(parents=True, exist_ok=True)
+        weekly_xlsx_path = out_root / weekly_xlsx_name
+        try:
+            write_weekly_type_xlsx(saidi_report, weekly_xlsx_path)
+        except Exception as e:
+            logger.exception("镔鑫周度料型统计 xlsx 生成失败")
+            return {"error": f"料型统计报表生成失败: {e}"}
+
+        logger.info(
+            "[镔鑫周度料型] %s~%s 赛迪 %d车 准确率 %.2f%%",
+            start_date, end_date,
+            saidi_report.no_exclude_truck_count,
+            saidi_report.no_exclude_main_same_pct or 0,
+        )
+
+        return {
+            "site": "镔鑫钢铁",
+            "weekly_xlsx_path": str(weekly_xlsx_path),
+            "date_range": (
+                start_date if start_date == end_date else f"{start_date} ～ {end_date}"
+            ),
+            "weekly_summary_text": summary,
         }
 
     # ------------------------------------------------------------------
