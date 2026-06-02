@@ -11,6 +11,7 @@ Agent 业务逻辑完全不改，仅重写 app.py 布局。
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, timedelta
 from pathlib import Path
@@ -210,6 +211,12 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             }
         },
         "盛隆钢铁": {
+            "MINIO图像下载": {
+                "MINIO图像下载": "MINIO图像下载 2026-05-01 到 2026-05-07",
+            },
+            "3000网站图像下载": {
+                "3000网站图像下载": "3000网站图像下载 2026-05-01 到 2026-05-07",
+            },
             "废钢检判": {
                 "昨日废钢检判情况": f"发 {yesterday} 的【盛隆】废钢检判情况",
                 "近 7 天报表": f"导出 {week_start} 到 {today_s} 的【盛隆】废钢检判报表",
@@ -225,7 +232,6 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                     "其中 2026-04-30 至 2026-05-06、2026-05-07 至 2026-05-13 "
                     "当作一个统计周期进行统计"
                 ),
-                "下载监控图像": "下载盛隆工厂 2026-05-01 到 2026-05-07 的监控图像",
             }
         },
     }
@@ -476,6 +482,82 @@ def build_ui() -> gr.Blocks:
                     lines=4,
                 )
                 fill_btn = gr.Button("填入输入框", variant="primary", size="sm")
+                
+                def _update_businesses(project):
+                    first_business = next(iter(q[project]))
+                    first_command = next(iter(q[project][first_business]))
+                    return (
+                        gr.update(choices=list(q[project].keys()), value=first_business),
+                        gr.update(choices=list(q[project][first_business].keys()), value=first_command),
+                        q[project][first_business][first_command],
+                    )
+
+                def _update_commands(project, business):
+                    first_command = next(iter(q[project][business]))
+                    return (
+                        gr.update(choices=list(q[project][business].keys()), value=first_command),
+                        q[project][business][first_command],
+                    )
+
+                def _select_command(project, business, command):
+                    return q[project][business][command]
+
+                project_select.change(
+                    _update_businesses,
+                    inputs=project_select,
+                    outputs=[business_select, command_select, command_preview],
+                    queue=False,
+                )
+                business_select.change(
+                    _update_commands,
+                    inputs=[project_select, business_select],
+                    outputs=[command_select, command_preview],
+                    queue=False,
+                )
+                command_select.change(
+                    _select_command,
+                    inputs=[project_select, business_select, command_select],
+                    outputs=command_preview,
+                    queue=False,
+                )
+                
+                gr.HTML(
+                    '<div class="side-title">业务归属</div>'
+                    '<div class="proj-card">'
+                    '  <div class="proj-row">'
+                    '    <span class="proj-tag pt">打包带钢卷</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">永锋钢铁</span>'
+                    '  </div>'
+                    '  <div class="proj-row">'
+                    '    <span class="proj-tag pt">烧结矿颗粒度</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">永锋钢铁</span>'
+                    '  </div>'
+                    '  <div class="proj-row">'
+                    '    <span class="proj-tag sc">废钢检判</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">镔鑫钢铁</span>'
+                    '  </div>'
+                    '  <div class="proj-row">'
+                    '    <span class="proj-tag sl">废钢检判</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">盛隆钢铁</span>'
+                    '  </div>'
+                    '</div>'
+                )
+
+                gr.HTML('<div class="side-title">使用提示</div>')
+                gr.Markdown(
+                    "- 问**打包带**：用「钢卷 / 打包带 / 打数 / 应打数 / 永锋」等词\n"
+                    "- 问**镔鑫废钢**：带【镔鑫】字样\n"
+                    "- 问**盛隆废钢**：带【盛隆】字样\n"
+                    "- 只说「废钢」不指明时，会反问你是镔鑫还是盛隆\n"
+                    "- **盛隆主表**支持任意周期累积，按钮里改/补日期即可\n"
+                    "- **重废归一化主表**会排除人工无任意重废1/2/3的车次\n"
+                    "- 按钮只是填好文字，**回车**发送"
+                )
+                fill_btn = gr.Button("填入输入框", variant="primary", size="sm")
 
                 def _update_businesses(project):
                     first_business = next(iter(q[project]))
@@ -614,6 +696,7 @@ def build_ui() -> gr.Blocks:
                 with gr.Accordion("📦 下载图片包", open=False):
                     download_zip_file = gr.File(label="点击下载 ZIP 文件到本地", interactive=False)
 
+
                 # ------- 下载实时日志面板 -------
                 with gr.Accordion("📋 下载实时日志", open=False):
                     log_file_display = gr.Textbox(
@@ -655,34 +738,30 @@ def build_ui() -> gr.Blocks:
             return "", history + [{"role": "user", "content": message}]
 
         # ========== 下载功能处理器（流式）==========
-        def download_handler(message, history, session):
+        def download_minio_handler(message, history, session):
             history = _normalize_chat_history(history)
-            
+
             import re
             from datetime import datetime, timedelta
             from minio import Minio
-            from pathlib import Path
-            
-            # 解析日期
+            from agent.shenglong.minio_downloader import MINIO_HOST, MINIO_API_PORT, BUCKET, PREFIX_BASE, ACCESS_KEY, SECRET_KEY, download_and_pack
+
             match = re.search(r'(\d{4}-\d{2}-\d{2})\s*到\s*(\d{4}-\d{2}-\d{2})', message)
             if not match:
-                history.append({"role": "assistant", "content": "请使用格式：下载盛隆工厂 YYYY-MM-DD 到 YYYY-MM-DD 的监控图像"})
+                history.append({"role": "assistant", "content": "请使用格式：MINIO图像下载 YYYY-MM-DD 到 YYYY-MM-DD"})
                 xlsx, pptx, imgs = _scan_latest_artifacts()
                 yield history, session, xlsx, pptx, imgs, None
                 return
-            
+
             start_date = match.group(1)
             end_date = match.group(2)
-            
-            # 获取文件总数
-            from agent.shenglong.minio_downloader import MINIO_HOST, MINIO_API_PORT, BUCKET, PREFIX_BASE, ACCESS_KEY, SECRET_KEY
+
             client = Minio(
                 f"{MINIO_HOST}:{MINIO_API_PORT}",
                 access_key=ACCESS_KEY,
                 secret_key=SECRET_KEY,
                 secure=False,
             )
-            
             start = datetime.strptime(start_date, "%Y-%m-%d").date()
             end = datetime.strptime(end_date, "%Y-%m-%d").date()
             total_files = 0
@@ -693,33 +772,55 @@ def build_ui() -> gr.Blocks:
                     objects = list(client.list_objects(BUCKET, prefix=prefix, recursive=True))
                     files = [o for o in objects if o.size and o.size > 0]
                     total_files += len(files)
-                except:
+                except Exception:
                     pass
                 current += timedelta(days=1)
-            
-            # 添加用户消息
-            # history.append({"role": "user", "content": message})
-            
-            # 立即返回提示消息
-            start_msg = f"📥 正在下载 {start_date} 到 {end_date} 的监控图像，共 {total_files} 个文件\n\n点击「📋 下载实时日志」面板中的「🔄 手动刷新日志」按钮查看下载进度。\n\n下载完成后我会通知你。"
-            history.append({"role": "assistant", "content": start_msg})
+
+            history.append({"role": "assistant", "content": f"📥 正在下载 {start_date} 到 {end_date} 的 MINIO 图像，共 {total_files} 个文件..."})
             xlsx, pptx, imgs = _scan_latest_artifacts()
             yield history, session, xlsx, pptx, imgs, None
-            
-            # 下载并打包
-            from agent.shenglong.minio_downloader import download_and_pack
-            
+
             zip_path, success, failed = download_and_pack(start_date, end_date)
-            
             if zip_path:
-                final_msg = f"\n\n✅ 下载完成！成功 {success} 个文件，失败 {failed} 个\n\n点击下方「📦 下载图片包」按钮下载 ZIP 文件到本地。"
-                history.append({"role": "assistant", "content": final_msg})
+                history.append({"role": "assistant", "content": f"\n\n✅ 下载完成！成功 {success} 个文件，失败 {failed} 个\n\n点击下方「📦 下载图片包」按钮下载 ZIP 文件到本地。"})
                 xlsx, pptx, imgs = _scan_latest_artifacts()
                 yield history, session, xlsx, pptx, imgs, zip_path
             else:
                 history.append({"role": "assistant", "content": "❌ 下载失败"})
                 xlsx, pptx, imgs = _scan_latest_artifacts()
                 yield history, session, xlsx, pptx, imgs, None
+
+        def download_3000_handler(message, history, session):
+            history = _normalize_chat_history(history)
+
+            import re
+            from agent.shenglong.downloader import download_images_by_date_range
+
+            match = re.search(r'(\d{4}-\d{2}-\d{2})\s*到\s*(\d{4}-\d{2}-\d{2})', message)
+            if not match:
+                history.append({"role": "assistant", "content": "请使用格式：3000网站图像下载 YYYY-MM-DD 到 YYYY-MM-DD"})
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                yield history, session, xlsx, pptx, imgs, None
+                return
+
+            start_date = match.group(1)
+            end_date = match.group(2)
+            history.append({"role": "assistant", "content": f"📥 正在下载 {start_date} 到 {end_date} 的 3000 网站图像（无需筛选），请稍候..."})
+            xlsx, pptx, imgs = _scan_latest_artifacts()
+            yield history, session, xlsx, pptx, imgs, None
+
+            result = download_images_by_date_range(
+                start_date,
+                end_date,
+                output_dir=SHENGLONG_ROOT,
+                include_missing_manual=True,
+            )
+
+            success = result.get("success", 0)
+            failed = result.get("failed", 0)
+            history.append({"role": "assistant", "content": f"\n\n✅ 下载完成！成功 {success} 个文件，失败 {failed} 个\n\n输出目录：{result.get('output_dir', '')}"})
+            xlsx, pptx, imgs = _scan_latest_artifacts()
+            yield history, session, xlsx, pptx, imgs, None
 
         # ========== 其他功能处理器（普通）==========
         def normal_handler(user_message, history, session):
@@ -754,9 +855,13 @@ def build_ui() -> gr.Blocks:
                         user_message = str(content).strip()
             
             # 判断是否是下载指令
-            if "下载盛隆工厂" in user_message and "监控图像" in user_message:
-                # 下载功能：使用生成器模式
-                for result in download_handler(user_message, history, session):
+            if "MINIO图像下载" in user_message:
+                # 下载功能：走 minio_downloader 逻辑
+                for result in download_minio_handler(user_message, history, session):
+                    yield result
+            elif "3000网站图像下载" in user_message:
+                # 下载功能：走 downloader.py 逻辑
+                for result in download_3000_handler(user_message, history, session):
                     yield result
             else:
                 # 其他功能：普通模式
