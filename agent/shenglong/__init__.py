@@ -4,7 +4,7 @@
 独立成一个子包以避免干扰镔鑫（agent.scrap）模块。
 """
 
-（from agent.shenglong.downloader import (
+from agent.shenglong.downloader import (
     DayDownloadResult,
     TruckDownloadResult,
     download_images_by_date_range,
