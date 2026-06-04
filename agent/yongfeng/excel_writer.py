@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict
+
+os.environ.setdefault("TENCENT_DOCS_AUTO_UPLOAD", "1")
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .dict import BINS, MATERIAL_LABEL
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+TENCENT_UPLOAD_SCRIPT = PACKAGE_ROOT / "tools" / "tencent_docs_upload_xlsx_to_tencent_docs.py"
 
 
 def _style_header(cell):
@@ -113,11 +121,29 @@ def _write_sheet(ws, title: str, rows):
     ws.freeze_panes = "A3"
 
 
+def _maybe_upload_to_tencent_docs(output_path: Path) -> None:
+    if os.getenv("TENCENT_DOCS_AUTO_UPLOAD", "0") != "1":
+        return
+    if not TENCENT_UPLOAD_SCRIPT.exists():
+        raise FileNotFoundError(TENCENT_UPLOAD_SCRIPT)
+    cmd = [
+        sys.executable,
+        str(TENCENT_UPLOAD_SCRIPT),
+        "--xlsx",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
 def write_report(output_path: Path, result: Dict[str, Any]) -> None:
     wb = Workbook()
     ws1 = wb.active
-    _write_sheet(ws1, "1#烧结矿", result.get("1#", {}).get("rows", []))
-    ws2 = wb.create_sheet("2#烧结矿")
-    _write_sheet(ws2, "2#烧结矿", result.get("2#", {}).get("rows", []))
+    _write_sheet(ws1, "成3#烧结矿", result.get("1#", {}).get("rows", []))
+    ws2 = wb.create_sheet("203#烧结矿")
+    _write_sheet(ws2, "203#烧结矿", result.get("2#", {}).get("rows", []))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
+
+    if os.getenv("TENCENT_DOCS_AUTO_UPLOAD", "1") == "1":
+        cmd = [sys.executable, str(TENCENT_UPLOAD_SCRIPT), "--xlsx", str(output_path)]
+        subprocess.run(cmd, check=True)

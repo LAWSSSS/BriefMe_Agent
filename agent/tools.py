@@ -63,6 +63,31 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "yongfeng_export_and_upload_report",
+            "description": (
+                "【永锋项目】先在本地生成指定日期范围的 xlsx 报表，再自动上传为腾讯文档在线表格，"
+                "并默认移动到腾讯云空间文件夹 JOVGVfapiCoO。"
+                "适用于用户希望直接把本地新报表同步到腾讯文档时使用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": "起始日期，格式 YYYY-MM-DD",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "结束日期，格式 YYYY-MM-DD",
+                    },
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+    },
     # =========================================================
     # 废钢检判系统（scrap_ 前缀）- 与打包带项目完全隔离
     # =========================================================

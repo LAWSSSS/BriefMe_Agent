@@ -103,6 +103,16 @@ class LLMConfig:
 
 
 @dataclass
+class TencentDocsConfig:
+    """腾讯文档开放接口配置"""
+
+    access_token: str = os.getenv("TENCENT_DOCS_ACCESS_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHQiOiI4NjUxNmY3ZWI2N2M0ZjZiOTIyNDk5ZjE3MDg2MjY2MiIsInR5cCI6MSwiZXhwIjoxNzgyNjE4MzI3LjYxNzAzLCJpYXQiOjE3ODAwMjYzMjcuNjE3MDMsInN1YiI6ImZhZGNkOWI1Yjg0MzQ1M2I4NzY2N2JmMjczZDQyOWJhIn0.jjjy2B4aZZ-WFBpsgO-rYg9-iLVDccOS4GzMiOj-7s0")
+    client_id: str = os.getenv("TENCENT_DOCS_CLIENT_ID", "86516f7eb67c4f6b922499f170862662")
+    open_id: str = os.getenv("TENCENT_DOCS_OPEN_ID", "fadcd9b5b843453b87667bf273d429ba")
+    enabled: bool = os.getenv("TENCENT_DOCS_ENABLED", "1") == "1"
+
+
+@dataclass
 class YongfengConfig:
     """永锋烧结矿准确率配置"""
 
@@ -121,11 +131,13 @@ class YongfengConfig:
     api_code: str = "st2"
 
 
+
 @dataclass
 class Settings:
     vision: VisionConfig = field(default_factory=VisionConfig)
     vpn: VPNConfig = field(default_factory=VPNConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    tencent_docs: TencentDocsConfig = field(default_factory=TencentDocsConfig)
     yongfeng: YongfengConfig = field(default_factory=YongfengConfig)
     scrap: ScrapConfig = field(default_factory=ScrapConfig)
     shenglong: ShenglongConfig = field(default_factory=ShenglongConfig)
