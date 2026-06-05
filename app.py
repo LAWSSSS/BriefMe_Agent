@@ -34,6 +34,7 @@ DOWNLOADS_ROOT = Path("downloads")
 SCRAP_ROOT = DOWNLOADS_ROOT / "scrap"
 SHENGLONG_ROOT = DOWNLOADS_ROOT / "shenglong"
 YONGFENG_ROOT = DOWNLOADS_ROOT / "yongfeng"
+BXSTEEL_ROOT = DOWNLOADS_ROOT / "bxsteel"
 
 
 # =====================================================================
@@ -114,7 +115,7 @@ def _is_visible_file(p: Path) -> bool:
 
 
 def _scan_latest_artifacts() -> Tuple[Optional[str], Optional[str], List[str]]:
-    roots = [r for r in (SCRAP_ROOT, SHENGLONG_ROOT, YONGFENG_ROOT) if r.exists()]
+    roots = [r for r in (SCRAP_ROOT, SHENGLONG_ROOT, YONGFENG_ROOT, BXSTEEL_ROOT) if r.exists()]
     if not roots:
         return None, None, []
 
@@ -208,7 +209,11 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                     "请列出你支持的所有功能和典型用法示例。"
                     "分【打包带钢卷 @ 永锋】【废钢检判 @ 镔鑫】【废钢检判 @ 盛隆】三节回答。"
                 ),
-            }
+            },
+            "球机图像下载+重命名": {
+                "下载昨日球机图像": f"下载 {yesterday} 的镔鑫球机图像",
+                "下载球机图像": f"下载 {week_start} 到 {today_s} 的镔鑫球机图像",
+            },
         },
         "盛隆钢铁": {
             "MINIO图像下载": {
@@ -447,6 +452,7 @@ def build_ui() -> gr.Blocks:
                     "一个入口，多钢厂多场景 — 当前已接入："
                     '<span class="proj-chip pt-chip">打包带钢卷 @ 永锋钢铁</span>'
                     '<span class="proj-chip sc-chip">废钢检判 @ 镔鑫钢铁</span>'
+                    '<span class="proj-chip sc-chip">球机图像 @ 镔鑫钢铁</span>'
                     '<span class="proj-chip sl-chip">废钢检判 @ 盛隆钢铁</span>'
                     "</div>"
                 )
@@ -540,6 +546,11 @@ def build_ui() -> gr.Blocks:
                     '    <span class="proj-site">镔鑫钢铁</span>'
                     '  </div>'
                     '  <div class="proj-row">'
+                    '    <span class="proj-tag sc">球机图像下载+重命名</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">镔鑫钢铁</span>'
+                    '  </div>'
+                    '  <div class="proj-row">'
                     '    <span class="proj-tag sl">废钢检判</span>'
                     '    <span class="proj-arrow">→</span>'
                     '    <span class="proj-site">盛隆钢铁</span>'
@@ -555,6 +566,7 @@ def build_ui() -> gr.Blocks:
                     "- 只说「废钢」不指明时，会反问你是镔鑫还是盛隆\n"
                     "- **盛隆主表**支持任意周期累积，按钮里改/补日期即可\n"
                     "- **重废归一化主表**会排除人工无任意重废1/2/3的车次\n"
+                    "- **镔鑫球机图像**：在指令中写明日期、工号、密码即可\n"
                     "- 按钮只是填好文字，**回车**发送"
                 )
 
