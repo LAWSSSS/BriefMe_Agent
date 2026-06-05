@@ -114,6 +114,11 @@ def _build_system_prompt() -> str:
         "  - yongfeng_export_accuracy_report （指定时间范围内的人工筛分 vs 视觉准确率报表）\n"
         "    该工具由 GLM function calling 触发；只要用户明确说【生成/导出/统计 永锋烧结矿颗粒度准确率报表】，"
         "    就应优先选择此工具。\n\n"
+        "【镔鑫球机图像下载+重命名】工具（bxsteel_ 前缀）：\n"
+        "  - bxsteel_download_images （从镔鑫废钢智能检判系统下载球机原图并重命名，默认下载昨天）\n"
+        "    该工具需要用户提供工号和密码。即使当前消息中未提供凭证，"
+        "也请先调用该工具（用空字符串传入 username/password），"
+        "系统会自动弹出凭证输入提示。不要自行反问用户。\n\n"
         "判断用户问的是哪个项目，请严格遵守以下【路由铁律】：\n"
         "1. 用户说【打包带 / 钢卷 / 打数 / 应打数 / 已打数 / 正常 / 异常 / 未识别 / 永锋打包带】\n"
         "   → 必须走【打包带钢卷】工具（无前缀）\n"
@@ -131,6 +136,8 @@ def _build_system_prompt() -> str:
         "6. 打包带关键词和废钢/烧结矿关键词都出现 或 都没有\n"
         "   → 反问：『请问你问的是【打包带钢卷 @ 永锋】、【废钢检判 @ 镔鑫】、【废钢检判 @ 盛隆】、还是【永锋烧结矿准确率】？』\n"
         "7. 反问一次之后，根据用户回答里的关键词再决定走哪条路径；依然不明确则继续反问。\n"
+        "8. 用户说【下载镔鑫球机图像 / 球机图像下载 / 球机原图下载 / 下载车辆图片】\n"
+        "   → 走 bxsteel_download_images 工具。即使没有凭证也先调用，系统会弹出输入提示。\n"
         "路由错误会引发严重现场事故，请严格遵守。\n\n"
         f"今天是{today.strftime('%Y-%m-%d')}，"
         f"昨天是{yesterday.strftime('%Y-%m-%d')}，"
@@ -219,6 +226,7 @@ class SteelCoilAgent:
         self._scrap_client = None  # 惰性初始化，避免未用废钢功能时报错
         self._shenglong_client = None
         self.client: Optional[ZhipuAI] = None
+        self._bxsteel_pending_args: Optional[Dict[str, Any]] = None  # 待下载的 bxsteel 参数
 
         if settings.llm.api_key:
             self.client = ZhipuAI(api_key=settings.llm.api_key)
@@ -276,6 +284,9 @@ class SteelCoilAgent:
         if vpn_state == "waiting_confirm":
             return self._handle_vpn_confirm(user_message, session)
 
+        if vpn_state == "waiting_bxsteel_creds":
+            return self._handle_bxsteel_creds(user_message, session)
+
         return self._process_message(user_message, session)
 
     # ------------------------------------------------------------------
@@ -332,6 +343,65 @@ class SteelCoilAgent:
         keywords = ["已连接", "连好了", "连接了", "连上了", "ok", "OK", "好了", "done"]
         return any(kw in text for kw in keywords)
 
+    def _handle_bxsteel_creds(
+        self, user_input: str, session: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
+        """解析用户回复的镔鑫凭证信息并执行下载"""
+        import re
+
+        pending = self._bxsteel_pending_args
+        if not pending:
+            session["vpn_state"] = "unknown"
+            return self._process_message(user_input, session)
+
+        text = user_input.strip()
+
+        username = ""
+        password = ""
+        output_dir = ""
+
+        m_uid = re.search(r"工号[：:]\s*(\S+)", text)
+        if m_uid:
+            username = m_uid.group(1).strip()
+
+        m_pwd = re.search(r"密码[：:]\s*(\S+)", text)
+        if m_pwd:
+            password = m_pwd.group(1).strip()
+
+        m_dir = re.search(r"保存地址[（(]?可选.*?[）)]?\s*[：:]\s*(.+)", text)
+        if m_dir:
+            output_dir = m_dir.group(1).strip()
+        if not output_dir:
+            m_dir2 = re.search(r"保存地址[（(]?可选.*?[）)]?\s*[：:]\s*$", text, re.MULTILINE)
+            if m_dir2:
+                output_dir = ""
+
+        if not username or not password:
+            return (
+                "工号和密码是必填的，请按以下格式回复：\n\n"
+                "```\n"
+                "工号：022499\n"
+                "密码：your_password\n"
+                "保存地址（可选，留空=默认保存地址）：\n"
+                "```",
+                session,
+            )
+
+        pending["username"] = username
+        pending["password"] = password
+        if output_dir:
+            pending["output_dir"] = output_dir
+
+        session["vpn_state"] = "unknown"
+        self._bxsteel_pending_args = None
+
+        result = self._tool_bxsteel_download_images(**pending)
+        session["messages"].append({
+            "role": "assistant",
+            "content": result.get("summary_text", "下载完成"),
+        })
+        return result.get("summary_text", "下载完成"), session
+
     # ------------------------------------------------------------------
     #  核心消息处理：LLM 意图解析 → 工具调用 → 格式化回复
     # ------------------------------------------------------------------
@@ -362,9 +432,9 @@ class SteelCoilAgent:
             return reply, session
 
         tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
-        # 盛隆图像下载工具不需要检查永锋 VPN
+        # 盛隆图像下载、镔鑫球机图像下载工具不需要检查永锋 VPN
         any_packing_tool = any(
-            not n.startswith("scrap_") and not n.startswith("shenglong_") and n != "download_shenglong_images"
+            not n.startswith("scrap_") and not n.startswith("shenglong_") and not n.startswith("bxsteel_") and n != "download_shenglong_images"
             for n in tool_names
         )
 
@@ -390,6 +460,28 @@ class SteelCoilAgent:
         messages.append(self._msg_to_dict(assistant_msg))
 
         for tool_call in assistant_msg.tool_calls:
+            func_name = tool_call.function.name
+
+            # 镔鑫球机下载：如果没有凭证，拦截并弹出输入提示
+            if func_name == "bxsteel_download_images":
+                try:
+                    args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+                if not args.get("username") or not args.get("password"):
+                    self._bxsteel_pending_args = args
+                    session["vpn_state"] = "waiting_bxsteel_creds"
+                    messages.pop()
+                    return (
+                        "请提供镔鑫系统的登录凭证：\n\n"
+                        "```\n"
+                        "工号：\n"
+                        "密码：\n"
+                        "保存地址（可选，留空=默认保存地址）：\n"
+                        "```",
+                        session,
+                    )
+
             result = self._execute_tool(tool_call)
             messages.append(
                 {
@@ -506,6 +598,15 @@ class SteelCoilAgent:
 
         if func_name == "yongfeng_export_report":
             return self._tool_yongfeng_export_report(args)
+
+        if func_name == "bxsteel_download_images":
+            return self._tool_bxsteel_download_images(
+                args.get("start_date", ""),
+                args.get("end_date", ""),
+                args.get("username", ""),
+                args.get("password", ""),
+                args.get("output_dir") or None,
+            )
 
         return {"error": f"未知工具: {func_name}"}
 
@@ -1250,6 +1351,65 @@ class SteelCoilAgent:
         except Exception as e:
             logger.error("永锋报表生成失败: %s", e)
             return {"error": f"永锋报表生成失败: {e}"}
+
+    def _tool_bxsteel_download_images(
+        self, start_date: str, end_date: str, username: str, password: str,
+        output_dir: str = None,
+    ) -> Dict[str, Any]:
+        try:
+            from agent.bxsteel.config import create_settings
+            from agent.bxsteel.pipeline import run as run_bxsteel
+
+            dl_dir = Path(output_dir) if output_dir else None
+            settings_bx = create_settings(
+                username=username.strip(),
+                password=password.strip(),
+                base_url="http://172.31.1.102:8081",
+                download_dir=dl_dir,
+            )
+
+            reports = run_bxsteel(
+                settings=settings_bx,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+            lines: list[str] = []
+            lines.append("==================== 汇总 ====================")
+            total_saved = 0
+            total_failed = 0
+            total_skipped_no_manual = 0
+            total_skipped_no_images = 0
+            total_skipped_existing = 0
+            for r in reports:
+                lines.append(
+                    f"{r.date}: 车辆 {r.processed}/{r.total_trucks} 处理，"
+                    f"保存 {r.saved_files} 张，"
+                    f"跳过已有 {r.skipped_existing} 张，"
+                    f"失败 {r.failed_files} 张；"
+                    f"无人工判级 {r.skipped_no_manual}，无原图 {r.skipped_no_images}"
+                )
+                total_saved += r.saved_files
+                total_failed += r.failed_files
+                total_skipped_no_manual += r.skipped_no_manual
+                total_skipped_no_images += r.skipped_no_images
+                total_skipped_existing += r.skipped_existing
+            lines.append("==============================================")
+            lines.append(f"\n图片保存目录: {settings_bx.download_dir}")
+            info = "\n".join(lines)
+
+            return {
+                "site": "镔鑫钢铁",
+                "summary_text": (
+                    f"下载完成！共 {total_saved} 张图片保存成功。\n{info}"
+                ),
+            }
+        except Exception as e:
+            logger.exception("bxsteel download failed")
+            return {
+                "site": "镔鑫钢铁",
+                "summary_text": f"下载失败：{e}",
+            }
 
 
     # ------------------------------------------------------------------

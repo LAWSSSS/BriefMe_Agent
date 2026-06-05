@@ -521,4 +521,49 @@ TOOLS = [
             }
         }
     },
+    # =========================================================
+    # 镔鑫球机图像下载+重命名（bxsteel_ 前缀）
+    # =========================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "bxsteel_download_images",
+            "description": (
+                "【镔鑫球机图像下载+重命名】从镔鑫废钢智能检判系统下载指定日期或日期区间的"
+                "球机原图，并按人工判级结果重命名落盘。默认下载昨天的数据。"
+                "需要用户提供镔鑫系统的登录凭证（工号+密码）。"
+                "所有参数（日期、工号、密码、下载目录）都必须从用户的自然语言消息中提取。"
+                "工号和密码是必填的，若用户未提供则必须反问。"
+                "适用场景：用户说"
+                "【下载镔鑫球机图像 / 下载昨天的球机图像 / 镔鑫球机图像下载 / "
+                "球机原图下载 / 下载镔鑫车辆图片】等指令。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": "起始日期 YYYY-MM-DD。若只下载一天，start_date=end_date。默认为昨天。"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "结束日期 YYYY-MM-DD"
+                    },
+                    "username": {
+                        "type": "string",
+                        "description": "镔鑫系统登录工号（必填），从用户消息中提取，如 022499"
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "镔鑫系统登录密码（必填），从用户消息中提取"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "下载目录路径（可选），用户不指定则使用默认目录"
+                    },
+                },
+                "required": ["start_date", "end_date", "username", "password"],
+            },
+        },
+    },
 ]
