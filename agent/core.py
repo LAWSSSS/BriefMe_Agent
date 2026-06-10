@@ -387,6 +387,14 @@ class SteelCoilAgent:
                 session,
             )
 
+        # 兜底：如果 LLM 没传或漏传日期参数，用昨天作为默认值
+        from datetime import date, timedelta
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        if not pending.get("start_date"):
+            pending["start_date"] = yesterday
+        if not pending.get("end_date"):
+            pending["end_date"] = pending["start_date"]
+
         pending["username"] = username
         pending["password"] = password
         if output_dir:
