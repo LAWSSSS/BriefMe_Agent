@@ -566,4 +566,47 @@ TOOLS = [
             },
         },
     },
+    # =========================================================
+    # 用友检判结果图片下载（yonyou_ 前缀）
+    # =========================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "yonyou_download_images",
+            "description": (
+                "【用友检判结果图片下载】从用友智能判级系统下载指定日期或日期区间的"
+                "检判结果原始图片（包括原图、判级识别图、危险物图、夹杂物图、饼图）。"
+                "默认下载昨天的数据。需要用户提供用友系统的登录凭证（账号+密码）。"
+                "适用场景：用户说"
+                "【下载用友检判结果图 / 用友图片下载 / 用友检判图 / "
+                "下载用友质检判级图】等指令。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": "起始日期 YYYY-MM-DD。若只下载一天，start_date=end_date。默认为昨天。"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "结束日期 YYYY-MM-DD"
+                    },
+                    "username": {
+                        "type": "string",
+                        "description": "用友系统登录账号（必填），从用户消息中提取"
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "用友系统登录密码（必填），从用户消息中提取"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "下载目录路径（可选），用户不指定则使用默认目录"
+                    },
+                },
+                "required": ["start_date", "end_date", "username", "password"],
+            },
+        },
+    },
 ]
