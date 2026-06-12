@@ -35,6 +35,7 @@ SCRAP_ROOT = DOWNLOADS_ROOT / "scrap"
 SHENGLONG_ROOT = DOWNLOADS_ROOT / "shenglong"
 YONGFENG_ROOT = DOWNLOADS_ROOT / "yongfeng"
 BXSTEEL_ROOT = DOWNLOADS_ROOT / "bxsteel"
+YONYOU_ROOT = DOWNLOADS_ROOT / "yonyou"
 
 
 # =====================================================================
@@ -74,18 +75,33 @@ def _check_shenglong_vpn() -> bool:
         return False
 
 
+def _check_yonyou_vpn() -> bool:
+    """用友 VPN 是否连通（3s 内能访问前端页）"""
+    try:
+        r = httpx.get(
+            "http://172.26.46.12:8890/",
+            timeout=3.0,
+            follow_redirects=True,
+        )
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
 def _status_html() -> str:
     today_str = date.today().strftime("%Y-%m-%d")
     pt_ok = _check_packing_vpn()
     sc_ok = _check_scrap_vpn()
     sl_ok = _check_shenglong_vpn()
+    yy_ok = _check_yonyou_vpn()
     pt_badge = _badge("打包带 VPN", pt_ok)
     sc_badge = _badge("镔鑫 VPN", sc_ok)
     sl_badge = _badge("盛隆 VPN", sl_ok)
+    yy_badge = _badge("用友 VPN", yy_ok)
     return (
         f'<div class="status-bar">'
         f'<span class="today-chip">📅 {today_str}</span>'
-        f"{pt_badge}{sc_badge}{sl_badge}"
+        f"{pt_badge}{sc_badge}{sl_badge}{yy_badge}"
         f"</div>"
     )
 
@@ -115,7 +131,7 @@ def _is_visible_file(p: Path) -> bool:
 
 
 def _scan_latest_artifacts() -> Tuple[Optional[str], Optional[str], List[str]]:
-    roots = [r for r in (SCRAP_ROOT, SHENGLONG_ROOT, YONGFENG_ROOT, BXSTEEL_ROOT) if r.exists()]
+    roots = [r for r in (SCRAP_ROOT, SHENGLONG_ROOT, YONGFENG_ROOT, BXSTEEL_ROOT, YONYOU_ROOT) if r.exists()]
     if not roots:
         return None, None, []
 
@@ -213,6 +229,10 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             "球机图像下载+重命名": {
                 "下载昨日球机图像": f"下载 {yesterday} 的镔鑫球机图像",
                 "下载球机图像": f"下载 {week_start} 到 {today_s} 的镔鑫球机图像",
+            },
+            "用友检判结果图片": {
+                "下载昨日检判结果图": f"下载 {yesterday} 的用友检判结果图片",
+                "下载用友检判结果图": f"下载 {week_start} 到 {today_s} 的用友检判结果图片",
             },
         },
         "盛隆钢铁": {
@@ -453,6 +473,7 @@ def build_ui() -> gr.Blocks:
                     '<span class="proj-chip pt-chip">打包带钢卷 @ 永锋钢铁</span>'
                     '<span class="proj-chip sc-chip">废钢检判 @ 镔鑫钢铁</span>'
                     '<span class="proj-chip sc-chip">球机图像 @ 镔鑫钢铁</span>'
+                    '<span class="proj-chip sc-chip">用友检判图 @ 镔鑫</span>'
                     '<span class="proj-chip sl-chip">废钢检判 @ 盛隆钢铁</span>'
                     "</div>"
                 )
@@ -551,6 +572,11 @@ def build_ui() -> gr.Blocks:
                     '    <span class="proj-site">镔鑫钢铁</span>'
                     '  </div>'
                     '  <div class="proj-row">'
+                    '    <span class="proj-tag sc">用友检判结果图</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">镔鑫钢铁</span>'
+                    '  </div>'
+                    '  <div class="proj-row">'
                     '    <span class="proj-tag sl">废钢检判</span>'
                     '    <span class="proj-arrow">→</span>'
                     '    <span class="proj-site">盛隆钢铁</span>'
@@ -567,6 +593,7 @@ def build_ui() -> gr.Blocks:
                     "- **盛隆主表**支持任意周期累积，按钮里改/补日期即可\n"
                     "- **重废归一化主表**会排除人工无任意重废1/2/3的车次\n"
                     "- **镔鑫球机图像**：在指令中写明日期、工号、密码即可\n"
+                    "- **用友检判图**：在指令中写明日期、账号、密码即可\n"
                     "- 按钮只是填好文字，**回车**发送"
                 )
 
