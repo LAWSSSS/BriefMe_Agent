@@ -562,25 +562,24 @@ class SteelCoilAgent:
                         session,
                     )
 
-            # 用友图片下载：如果没有凭证，拦截并弹出输入提示
+            # 用友图片下载：始终弹出凭证输入提示（不走 LLM 自动填充）
             if func_name == "yongyou_download_images":
                 try:
                     args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
                     args = {}
-                if not args.get("username") or not args.get("password"):
-                    self._yongyou_pending_args = args
-                    session["vpn_state"] = "waiting_yongyou_creds"
-                    messages.pop()
-                    return (
-                        "请提供用友系统的登录凭证：\n\n"
-                        "```\n"
-                        "工号/账号：\n"
-                        "密码：\n"
-                        "保存地址（可选，留空=默认保存地址）：\n"
-                        "```",
-                        session,
-                    )
+                self._yongyou_pending_args = args
+                session["vpn_state"] = "waiting_yongyou_creds"
+                messages.pop()
+                return (
+                    "请提供用友系统的登录凭证：\n\n"
+                    "```\n"
+                    "工号/账号：\n"
+                    "密码：\n"
+                    "保存地址（可选，留空=默认保存地址）：\n"
+                    "```",
+                    session,
+                )
 
             result = self._execute_tool(tool_call)
             messages.append(
