@@ -232,6 +232,11 @@ class DailyShenglongStats:
         return sum(1 for t in self.trucks if t.main_same is True)
 
     @property
+    def main_match_count(self) -> int:
+        """主料识别车数 = 只要主料名字一致即可"""
+        return sum(1 for t in self.trucks if t.main_name_match is True)
+
+    @property
     def deduction_compliant_count(self) -> int:
         """扣杂符合的车数"""
         return sum(1 for t in self.trucks if t.deduction_compliant is True)
@@ -277,7 +282,7 @@ class DailyShenglongStats:
             else "未达标"
         )
         lines.append(
-            f"1. 主料型识别率 R：赛迪 {r_s}（正确 {self.main_same_count}/"
+            f"1. 识别准确率 R：赛迪 {r_s}（正确 {self.main_same_count}/"
             f"{self.judgable_trucks} 辆）；"
             f"（目标值 ≥{int(target_recognition_rate*100)}%）- {r_ok}"
         )
@@ -324,6 +329,7 @@ class PeriodSummary:
     recognition_condition2_label: str = "其中主料型占比差异\n小于10% 车次数"
     recognition_result_label: str = "识别准确率"
     cumulative_recognition_label: str = "累计准确率"
+    recognition_match_label: str = "主料识别率"
 
     deduction_evaluable: int = 0
     deduction_compliant_count: int = 0

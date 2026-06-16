@@ -953,10 +953,13 @@ def _write_cumulative_sheet(
     recognition_title = (
         periods[0].recognition_result_label if periods else "识别准确率"
     )
+    recognition_match_title = (
+        periods[0].recognition_match_label if periods else "主料识别率"
+    )
     headers = [
         (2, 1, "期数"),
         (2, 2, "统计周期"),
-        (2, 3, recognition_title),
+        (2, 3, recognition_match_title),
         (2, 6, "扣重符合率"),
         (3, 3, "总"),
         (3, 4, "对"),
@@ -987,7 +990,7 @@ def _write_cumulative_sheet(
             f"第{idx}期",
             p.cycle_label,
             p.judgable_trucks,
-            p.main_within_10pct_count,
+            p.main_name_match_count,
             f"=IFERROR(D{row}/C{row},0)",
             p.deduction_compliant_count,
             f"=IFERROR(F{row}/C{row},0)",
@@ -1000,7 +1003,7 @@ def _write_cumulative_sheet(
             if col == 5:
                 cell.number_format = "0.00%"
                 cell.fill = _rate_fill(
-                    p.main_within_10pct_count,
+                    p.main_name_match_count,
                     p.judgable_trucks,
                     target_recognition_rate,
                 )
@@ -1068,10 +1071,12 @@ def _write_summary_box(
     """在 Excel 末尾写汇总框；返回下一行号"""
     total_trucks = sum(s.total_trucks for s in stats_list)
     judgable = sum(s.judgable_trucks for s in stats_list)
+    main_match = sum(s.main_name_match_count for s in stats_list)
     main_same = sum(s.main_same_count for s in stats_list)
     dd_eval = sum(s.deduction_evaluable for s in stats_list)
     dd_ok = sum(s.deduction_compliant_count for s in stats_list)
 
+    match_rate = (main_match / judgable * 100.0) if judgable > 0 else None
     r = (main_same / judgable * 100.0) if judgable > 0 else None
     c = (dd_ok / dd_eval * 100.0) if dd_eval > 0 else None
 
@@ -1087,9 +1092,12 @@ def _write_summary_box(
 
     row += 1
     lines = [
-        f"总车数：{total_trucks}    可判定车数：{judgable}    主料一致：{main_same}",
+        f"总车数：{total_trucks}    可判定车数：{judgable}    主料一致：{main_match}",
         (
-            f"主料识别率 R：{'N/A' if r is None else f'{r:.2f}%'}"
+            f"主料识别率 R：{'N/A' if match_rate is None else f'{match_rate:.2f}%'}"
+        ),
+        (
+            f"识别准确率 R：{'N/A' if r is None else f'{r:.2f}%'}"
             f"  (目标 ≥ {int(target_r * 100)}%)"
         ),
         f"扣杂可评估车数：{dd_eval}    扣杂符合车数：{dd_ok}",
