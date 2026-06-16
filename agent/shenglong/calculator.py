@@ -254,8 +254,11 @@ def calc_truck(
         MaterialRate(steel_type=main_a[0], rate=main_a[1]) if main_a else None
     )
 
-    # AI 扣重 kg → 吨
-    ai_kg = _safe_float(tcr.get("totalDeductWeight"))
+    # AI 扣重：直接使用扣重计算结果；calculatedDeductWeight 单位 kg → 吨
+    deduct_result = tcr.get("deductCalculationResult") or {}
+    ai_kg = _safe_float(deduct_result.get("calculatedDeductWeight"))
+    if ai_kg is None:
+        ai_kg = _safe_float(tcr.get("totalDeductWeight"))
     stat.ai_deduct_ton = ai_kg / 1000.0 if ai_kg is not None else None
 
     # AI 单价（目前无输出，留 None）
