@@ -24,6 +24,7 @@ from .page_actions import (
     extract_pie_charts,
     go_to_next_page,
     wait_spinner_gone,
+    get_row_cell_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class YYReport:
     failed_files: int = 0
     skipped_grade: int = 0
     skipped_no_detail: int = 0
+    excel_path: str = ""
 
 
 def _do_download(
@@ -61,6 +63,7 @@ def _do_download(
 
     report = YYReport(date=from_date or "all")
     skip_existing = True
+    vehicle_data: list[tuple[str, dict, Path]] = []  # (plate, row_data, vehicle_dir)
 
     with sync_playwright() as p:
         browser: Browser = p.chromium.launch(
@@ -126,6 +129,10 @@ def _do_download(
                 break
 
             all_rows_count += len(rows)
+
+            # 提取当前页所有行的表格数据
+            all_rows_data = get_row_cell_data(page)
+
             page_processed = 0
             page_skipped = 0
 
@@ -157,6 +164,10 @@ def _do_download(
                     continue
                 seen_plates.add(plate)
 
+                # 收集行数据供后续 Excel 构建
+                row_data = all_rows_data[idx] if idx < len(all_rows_data) else {}
+                vehicle_data.append((plate, row_data, settings.download_dir / plate))
+
                 # 下载
                 dres: DownloadResult = download_truck_images(
                     base_url=settings.base_url,
@@ -164,6 +175,7 @@ def _do_download(
                     context=context,
                     save_dir=settings.download_dir,
                     skip_existing=skip_existing,
+                    plate=plate,
                 )
                 report.processed += 1
                 report.saved_files += len(dres.saved)
@@ -202,6 +214,17 @@ def _do_download(
         report.total_trucks = all_rows_count
         browser.close()
 
+    # ---- 构建统计 Excel ----
+    excel_path = None
+    if vehicle_data:
+        from .excel_builder import build_stat_excel
+        date_tag = from_date or "all"
+        if to_date and to_date != from_date:
+            date_tag = f"{from_date}-{to_date}"
+        xlsx_name = f"用友检判统计_{date_tag.replace('-', '')}.xlsx"
+        excel_path = build_stat_excel(vehicle_data, settings.download_dir / xlsx_name)
+        report.excel_path = str(excel_path)
+
     logger.info("=" * 60)
     logger.info("下载完成！")
     logger.info("  处理车辆: %d", report.processed)
@@ -210,6 +233,8 @@ def _do_download(
     logger.info("  跳过已存在: %d", report.skipped_existing)
     logger.info("  失败: %d", report.failed_files)
     logger.info("  保存目录: %s", settings.download_dir)
+    if excel_path:
+        logger.info("  统计 Excel: %s", excel_path)
 
     return report
 

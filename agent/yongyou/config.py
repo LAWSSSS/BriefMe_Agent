@@ -6,8 +6,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CACHE_DIR: Path = PROJECT_ROOT / ".cache"
-DEFAULT_DOWNLOAD_DIR: Path = PROJECT_ROOT / "downloads" / "yonyou"
-STORAGE_STATE_FILE: Path = DEFAULT_CACHE_DIR / "yonyou_storage.json"
+DEFAULT_DOWNLOAD_DIR: Path = PROJECT_ROOT / "downloads" / "yongyou"
+STORAGE_STATE_FILE: Path = DEFAULT_CACHE_DIR / "yongyou_storage.json"
 
 
 @dataclass

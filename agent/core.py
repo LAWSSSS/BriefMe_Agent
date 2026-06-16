@@ -119,8 +119,8 @@ def _build_system_prompt() -> str:
         "    该工具需要用户提供工号和密码。即使当前消息中未提供凭证，"
         "也请先调用该工具（用空字符串传入 username/password），"
         "系统会自动弹出凭证输入提示。不要自行反问用户。\n\n"
-        "【用友检判结果图片下载】工具（yonyou_ 前缀）：\n"
-        "  - yonyou_download_images （从用友智能判级系统下载检判结果图片，默认下载昨天）\n"
+        "【用友检判结果图片下载】工具（yongyou_ 前缀）：\n"
+        "  - yongyou_download_images （从用友智能判级系统下载检判结果图片，默认下载昨天）\n"
         "    该工具需要用户提供登录账号和密码。即使当前消息中未提供凭证，"
         "也请先调用该工具（用空字符串传入 username/password），"
         "系统会自动弹出凭证输入提示。不要自行反问用户。\n\n"
@@ -143,8 +143,8 @@ def _build_system_prompt() -> str:
         "7. 反问一次之后，根据用户回答里的关键词再决定走哪条路径；依然不明确则继续反问。\n"
         "8. 用户说【下载镔鑫球机图像 / 球机图像下载 / 球机原图下载 / 下载车辆图片】\n"
         "   → 走 bxsteel_download_images 工具。即使没有凭证也先调用，系统会弹出输入提示。\n"
-        "9. 用户说【下载用友检判结果图 / 用友图片下载 / 用友检判图 / 下载用友质检判级图】\n"
-        "   → 走 yonyou_download_images 工具。即使没有凭证也先调用，系统会弹出输入提示。\n"
+        "9. 用户说【下载用友检判结果图 / 用友图片下载 / 用友检判图 / 用友检判统计 / 下载用友质检判级图】\n"
+        "   → 走 yongyou_download_images 工具。即使没有凭证也先调用，系统会弹出输入提示。\n"
         "路由错误会引发严重现场事故，请严格遵守。\n\n"
         f"今天是{today.strftime('%Y-%m-%d')}，"
         f"昨天是{yesterday.strftime('%Y-%m-%d')}，"
@@ -234,7 +234,7 @@ class SteelCoilAgent:
         self._shenglong_client = None
         self.client: Optional[ZhipuAI] = None
         self._bxsteel_pending_args: Optional[Dict[str, Any]] = None  # 待下载的 bxsteel 参数
-        self._yonyou_pending_args: Optional[Dict[str, Any]] = None  # 待下载的用友参数
+        self._yongyou_pending_args: Optional[Dict[str, Any]] = None  # 待下载的用友参数
 
         if settings.llm.api_key:
             self.client = ZhipuAI(api_key=settings.llm.api_key)
@@ -295,8 +295,8 @@ class SteelCoilAgent:
         if vpn_state == "waiting_bxsteel_creds":
             return self._handle_bxsteel_creds(user_message, session)
 
-        if vpn_state == "waiting_yonyou_creds":
-            return self._handle_yonyou_creds(user_message, session)
+        if vpn_state == "waiting_yongyou_creds":
+            return self._handle_yongyou_creds(user_message, session)
 
         return self._process_message(user_message, session)
 
@@ -421,12 +421,12 @@ class SteelCoilAgent:
         })
         return result.get("summary_text", "下载完成"), session
 
-    def _handle_yonyou_creds(
+    def _handle_yongyou_creds(
         self, user_input: str, session: Dict[str, Any]
     ) -> Tuple[str, Dict[str, Any]]:
         import re
 
-        pending = self._yonyou_pending_args
+        pending = self._yongyou_pending_args
         if not pending:
             session["vpn_state"] = "unknown"
             return self._process_message(user_input, session)
@@ -473,9 +473,9 @@ class SteelCoilAgent:
             pending["output_dir"] = output_dir
 
         session["vpn_state"] = "unknown"
-        self._yonyou_pending_args = None
+        self._yongyou_pending_args = None
 
-        result = self._tool_yonyou_download_images(**pending)
+        result = self._tool_yongyou_download_images(**pending)
         session["messages"].append({
             "role": "assistant",
             "content": result.get("summary_text", "下载完成"),
@@ -514,7 +514,7 @@ class SteelCoilAgent:
         tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
         # 盛隆图像下载、镔鑫球机图像下载、用友图片下载工具不需要检查永锋 VPN
         any_packing_tool = any(
-            not n.startswith("scrap_") and not n.startswith("shenglong_") and not n.startswith("bxsteel_") and not n.startswith("yonyou_") and n != "download_shenglong_images"
+            not n.startswith("scrap_") and not n.startswith("shenglong_") and not n.startswith("bxsteel_") and not n.startswith("yongyou_") and n != "download_shenglong_images"
             for n in tool_names
         )
 
@@ -563,14 +563,14 @@ class SteelCoilAgent:
                     )
 
             # 用友图片下载：如果没有凭证，拦截并弹出输入提示
-            if func_name == "yonyou_download_images":
+            if func_name == "yongyou_download_images":
                 try:
                     args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
                     args = {}
                 if not args.get("username") or not args.get("password"):
-                    self._yonyou_pending_args = args
-                    session["vpn_state"] = "waiting_yonyou_creds"
+                    self._yongyou_pending_args = args
+                    session["vpn_state"] = "waiting_yongyou_creds"
                     messages.pop()
                     return (
                         "请提供用友系统的登录凭证：\n\n"
@@ -708,8 +708,8 @@ class SteelCoilAgent:
                 args.get("output_dir") or None,
             )
 
-        if func_name == "yonyou_download_images":
-            return self._tool_yonyou_download_images(
+        if func_name == "yongyou_download_images":
+            return self._tool_yongyou_download_images(
                 args.get("start_date", ""),
                 args.get("end_date", ""),
                 args.get("username", ""),
@@ -1520,17 +1520,17 @@ class SteelCoilAgent:
                 "summary_text": f"下载失败：{e}",
             }
 
-    def _tool_yonyou_download_images(
+    def _tool_yongyou_download_images(
         self, start_date: str, end_date: str, username: str, password: str,
         output_dir: str = None,
     ) -> Dict[str, Any]:
         try:
-            from agent.yonyou.config import create_settings
-            from agent.yonyou.pipeline import run as run_yonyou
+            from agent.yongyou.config import create_settings
+            from agent.yongyou.pipeline import run as run_yongyou
 
             dl_dir = Path(output_dir) if output_dir else None
             if dl_dir is None:
-                from agent.yonyou.config import DEFAULT_DOWNLOAD_DIR
+                from agent.yongyou.config import DEFAULT_DOWNLOAD_DIR
                 sd = start_date.strip() or (date.today() - timedelta(days=1)).isoformat()
                 ed = end_date.strip() or sd
                 if sd == ed:
@@ -1545,7 +1545,7 @@ class SteelCoilAgent:
                 download_dir=dl_dir,
             )
 
-            reports = run_yonyou(
+            reports = run_yongyou(
                 settings=settings_yy,
                 start_date=start_date,
                 end_date=end_date,
@@ -1556,6 +1556,7 @@ class SteelCoilAgent:
             total_saved = 0
             total_failed = 0
             total_skipped_grade = 0
+            excel_path = ""
             for r in reports:
                 lines.append(
                     f"{r.date}: 处理 {r.processed} 辆车，"
@@ -1567,8 +1568,12 @@ class SteelCoilAgent:
                 total_saved += r.saved_files
                 total_failed += r.failed_files
                 total_skipped_grade += r.skipped_grade
+                if r.excel_path:
+                    excel_path = r.excel_path
             lines.append("==============================================")
             lines.append(f"\n图片保存目录: {settings_yy.download_dir}")
+            if excel_path:
+                lines.append(f"\n统计 Excel: {excel_path}")
             info = "\n".join(lines)
 
             return {
@@ -1578,7 +1583,7 @@ class SteelCoilAgent:
                 ),
             }
         except Exception as e:
-            logger.exception("yonyou download failed")
+            logger.exception("yongyou download failed")
             return {
                 "site": "用友",
                 "summary_text": f"下载失败：{e}",

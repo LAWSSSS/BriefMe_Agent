@@ -35,7 +35,7 @@ SCRAP_ROOT = DOWNLOADS_ROOT / "scrap"
 SHENGLONG_ROOT = DOWNLOADS_ROOT / "shenglong"
 YONGFENG_ROOT = DOWNLOADS_ROOT / "yongfeng"
 BXSTEEL_ROOT = DOWNLOADS_ROOT / "bxsteel"
-YONYOU_ROOT = DOWNLOADS_ROOT / "yonyou"
+YONGYOU_ROOT = DOWNLOADS_ROOT / "yongyou"
 
 
 # =====================================================================
@@ -75,7 +75,7 @@ def _check_shenglong_vpn() -> bool:
         return False
 
 
-def _check_yonyou_vpn() -> bool:
+def _check_yongyou_vpn() -> bool:
     """用友 VPN 是否连通（3s 内能访问前端页）"""
     try:
         r = httpx.get(
@@ -93,7 +93,7 @@ def _status_html() -> str:
     pt_ok = _check_packing_vpn()
     sc_ok = _check_scrap_vpn()
     sl_ok = _check_shenglong_vpn()
-    yy_ok = _check_yonyou_vpn()
+    yy_ok = _check_yongyou_vpn()
     pt_badge = _badge("打包带 VPN", pt_ok)
     sc_badge = _badge("镔鑫 VPN", sc_ok)
     sl_badge = _badge("盛隆 VPN", sl_ok)
@@ -131,7 +131,7 @@ def _is_visible_file(p: Path) -> bool:
 
 
 def _scan_latest_artifacts() -> Tuple[Optional[str], Optional[str], List[str]]:
-    roots = [r for r in (SCRAP_ROOT, SHENGLONG_ROOT, YONGFENG_ROOT, BXSTEEL_ROOT, YONYOU_ROOT) if r.exists()]
+    roots = [r for r in (SCRAP_ROOT, SHENGLONG_ROOT, YONGFENG_ROOT, BXSTEEL_ROOT, YONGYOU_ROOT) if r.exists()]
     if not roots:
         return None, None, []
 
@@ -205,7 +205,7 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                 "指定区间准确率报表": "生成 2026-04-01 到 2026-04-07 的烧结矿颗粒度人工筛分 vs 视觉准确率报表",
                 "支持哪些指令": (
                     "请列出你支持的所有功能和典型用法示例。"
-                    "分【打包带钢卷 @ 永锋】【烧结矿颗粒度 @ 永锋】【废钢检判 @ 镔鑫】【废钢检判 @ 盛隆】四节回答。"
+                    "分【打包带钢卷 @ 永锋】【烧结矿颗粒度 @ 永锋】【废钢检判 @ 镔鑫】【球机图像下载 @ 镔鑫】【用友检判统计 @ 镔鑫】【废钢检判 @ 盛隆】六节回答。"
                 ),
             },
         },
@@ -223,16 +223,16 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                 ),
                 "支持哪些指令": (
                     "请列出你支持的所有功能和典型用法示例。"
-                    "分【打包带钢卷 @ 永锋】【废钢检判 @ 镔鑫】【废钢检判 @ 盛隆】三节回答。"
+                    "分【打包带钢卷 @ 永锋】【废钢检判 @ 镔鑫】【球机图像下载 @ 镔鑫】【用友检判统计 @ 镔鑫】【废钢检判 @ 盛隆】五节回答。"
                 ),
             },
             "球机图像下载+重命名": {
                 "下载昨日球机图像": f"下载 {yesterday} 的镔鑫球机图像",
                 "下载球机图像": f"下载 {week_start} 到 {today_s} 的镔鑫球机图像",
             },
-            "用友检判结果图片": {
-                "下载昨日检判结果图": f"下载 {yesterday} 的用友检判结果图片",
-                "下载用友检判结果图": f"下载 {week_start} 到 {today_s} 的用友检判结果图片",
+            "用友检判统计": {
+                "下载昨日检判结果图": f"下载 {yesterday} 的用友检判结果图片并生成统计 Excel",
+                "下载用友检判结果图": f"下载 {week_start} 到 {today_s} 的用友检判结果图片并生成统计 Excel",
             },
         },
         "盛隆钢铁": {
@@ -593,7 +593,7 @@ def build_ui() -> gr.Blocks:
                     "- **盛隆主表**支持任意周期累积，按钮里改/补日期即可\n"
                     "- **重废归一化主表**会排除人工无任意重废1/2/3的车次\n"
                     "- **镔鑫球机图像**：在指令中写明日期、工号、密码即可\n"
-                    "- **用友检判图**：在指令中写明日期、账号、密码即可\n"
+                    "- **用友检判统计**：在指令中写明日期、账号、密码，自动下载图片+生成带图的 Excel\n"
                     "- 按钮只是填好文字，**回车**发送"
                 )
 
