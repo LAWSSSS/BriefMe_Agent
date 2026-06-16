@@ -98,6 +98,76 @@ def is_allowed_grade(grade: str) -> bool:
     return grade in ALLOWED_GRADES
 
 
+# 列定义（与 excel_exporter 一致，去掉序号）
+TABLE_COLUMNS = [
+    ("carNumber",         "车牌号",        14),
+    ("ibGradingDef",      "智能级别",      22),
+    ("afGradingDef",      "人工级别",      26),
+    ("ibOnRmimp",         "智能扣杂(kg)",  16),
+    ("afRmimp",           "人工扣杂(kg)",  16),
+    ("synthesizeThickness","智能综合厚度", 16),
+    ("ib2Price",          "智能价格",      14),
+    ("price",             "吨钢价格",      14),
+    ("punMount",          "奖惩金额",      14),
+    ("oversizeRatio",     "超尺寸占比(%)", 16),
+    ("materialTypeMax",   "主料型及占比",  20),
+    ("showThickThin",     "HM/MT模型及占比",18),
+    ("sysSlagRatio",      "智能扣杂率(%)", 16),
+    ("sysWarnSlagSum",    "报警物扣杂(kg)", 18),
+    ("sysWarnFee",        "报警物扣费(元)", 16),
+    ("baseRmimp",         "基础扣杂量(kg)", 16),
+    ("lowGradeRmimp",     "最低级别扣杂量(kg)", 20),
+    ("slagRmimp",         "渣土扣杂量(kg)", 16),
+    ("compositeRmimp",    "综合严重程度扣杂量(kg)", 24),
+    ("rasWeatherRmimp",   "雨雪天扣渣重量(kg)", 20),
+    ("counterweightRmimp","配重块扣渣重量(kg)", 20),
+    ("pigIronRmimp",      "生铁块扣渣重量(kg)", 20),
+    ("oilDegree",         "油污严重程度",  16),
+    ("rustDegree",        "锈蚀严重程度",  16),
+    ("soilDegree",        "土杂严重程度",  16),
+    ("compositeDegree",   "综合严重程度",  16),
+    ("suckerCount",       "XP数量占比",    14),
+    ("oilWarning",        "YW数量占比",    14),
+    ("sysMohuWarning",    "MH数量占比",    14),
+]
+
+
+def get_row_cell_data(page: Page) -> list[dict]:
+    """从当前页提取所有列数据（通过 JS 读取表头 data-col-key 映射）。
+
+    一次 JS 调用提取整页数据，调用方在点击行之前调用。
+    """
+    col_keys = [c[0] for c in TABLE_COLUMNS]
+    result = page.evaluate('''(targetKeys) => {
+        const keyToIndex = {};
+        const allThs = document.querySelectorAll('.wui-table-thead-th');
+        allThs.forEach((th, i) => {
+            const key = th.getAttribute('data-col-key') || '';
+            if (targetKeys.indexOf(key) >= 0) {
+                keyToIndex[key] = i;
+            }
+        });
+        const rows = [];
+        const trs = document.querySelectorAll(
+            '.wui-table-body .wui-table-row, .wui-table-body tr, .wui-table-tbody tr, [class*="table-body"] tr'
+        );
+        trs.forEach(tr => {
+            const tds = tr.querySelectorAll('td');
+            if (tds.length < 3) return;
+            const row = {};
+            for (const [key, idx] of Object.entries(keyToIndex)) {
+                if (idx >= tds.length) continue;
+                const td = tds[idx];
+                const title = td.getAttribute('title');
+                row[key] = (title || td.innerText || '').trim();
+            }
+            rows.push(row);
+        });
+        return rows;
+    }''', col_keys)
+    return result
+
+
 def wait_spinner_gone(page: Page, timeout: float = 15.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -106,6 +176,21 @@ def wait_spinner_gone(page: Page, timeout: float = 15.0):
             return
         time.sleep(0.5)
     logger.warning("加载遮罩超时 %ds", timeout)
+    # 超时后强制移除遮罩
+    _dismiss_spinner(page)
+
+
+def _dismiss_spinner(page: Page):
+    """通过 JS 隐藏全屏加载遮罩，解决首次登录遮罩不消失的问题。"""
+    try:
+        page.evaluate('''() => {
+            const spinners = document.querySelectorAll('.wui-spin-full-screen, .wui-spin-backdrop');
+            spinners.forEach(el => { el.style.display = 'none'; });
+        }''')
+        time.sleep(0.5)
+        logger.info("已强制移除加载遮罩")
+    except Exception:
+        pass
 
 
 def click_row_and_extract(

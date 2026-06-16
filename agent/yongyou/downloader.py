@@ -48,11 +48,15 @@ def download_truck_images(
     context: BrowserContext,
     save_dir: Path,
     skip_existing: bool = True,
+    plate: str = "",
 ) -> DownloadResult:
     all_urls: list[str] = []
     for urls in classified_urls.values():
         all_urls.extend(urls)
-    plate = get_plate_from_filename(get_image_filename(all_urls[0])) if all_urls else "unknown"
+    if plate:
+        pass  # 使用传入的车牌
+    else:
+        plate = get_plate_from_filename(get_image_filename(all_urls[0])) if all_urls else "unknown"
 
     plate_dir = save_dir / plate
 
