@@ -231,7 +231,14 @@ def click_row_and_extract(
     logger.info("=" * 50)
 
     try:
-        wait_spinner_gone(page, timeout=15)
+        wait_spinner_gone(page, timeout=30)
+
+        # 先关闭旧的详情面板（按 ESC），确保每次点击都从干净状态开始
+        try:
+            page.keyboard.press("Escape")
+            time.sleep(0.5)
+        except Exception:
+            pass
 
         try:
             plate_cell.click(timeout=5000)
@@ -241,6 +248,10 @@ def click_row_and_extract(
 
         time.sleep(delay)
         _wait_for_detail_section(page)
+
+        # 等遮罩消失（detail 加载），超时后再给 10 秒宽限期
+        wait_spinner_gone(page, timeout=15)
+        time.sleep(2)
 
         logger.debug("触发图片懒加载...")
         _scroll_detail_section(page)
@@ -383,57 +394,68 @@ def apply_date_filter(page: Page, from_date: str = "", to_date: str = ""):
 
     logger.info("应用时间筛选: %s ~ %s", from_date or "(不限)", to_date or "(不限)")
 
-    clicked = False
-    for sel in ['.icon-wrap .uf-arrow-down', '.icon-arrow', 'i.uf-arrow-down', '[class*="icon-wrap"] i']:
-        arrow = page.query_selector(sel)
-        if arrow:
+    # 核心策略：wui-picker 的 #fromDate / #toDate 输入框，先清空再输入
+    for date_id, date_val in [("#fromDate", from_date), ("#toDate", to_date)]:
+        if not date_val:
+            continue
+        try:
+            # 点击日历图标展开日期选择器
+            page.click(f"span#{date_id.replace('#', '')}_suffix i", timeout=3000)
+            time.sleep(0.5)
+        except Exception:
+            pass
+        # Playwright 点击输入框 → 全选清除 → 键入新值
+        try:
+            inp = page.wait_for_selector(date_id, state="visible", timeout=3000)
+            if inp:
+                inp.click()
+                time.sleep(0.2)
+                page.keyboard.press("Control+a")
+                page.keyboard.type(date_val, delay=30)
+                page.keyboard.press("Enter")
+                logger.info("已填写 %s: %s", date_id, date_val)
+        except Exception:
+            # 兜底: 用原生 setter 绕过框架拦截
+            page.evaluate('''({id, val}) => {
+                const inp = document.querySelector(id);
+                if (inp) {
+                    const setter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    ).set;
+                    setter.call(inp, val);
+                    inp.dispatchEvent(new Event('input', {bubbles: true}));
+                    inp.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+            }''', {"id": date_id, "val": date_val})
+            logger.info("JS 赋值 %s: %s", date_id, date_val)
+
+    time.sleep(1)
+
+    # 触发查询
+    triggered = False
+    for sel in [
+        'button:has(.uf-search-light-2)',
+        '.uf-search-light-2',
+        'button:has-text("查询")',
+        'button:has-text("搜索")',
+        '[class*="search"]',
+    ]:
+        btn = page.query_selector(sel)
+        if btn:
             try:
-                arrow.click()
-                time.sleep(0.8)
-                clicked = True
+                btn.click()
+                triggered = True
+                logger.info("已点击查询按钮: %s", sel)
                 break
             except Exception:
                 continue
-    if not clicked:
-        logger.warning("未找到下拉箭头，时间筛选可能未生效")
 
-    if from_date:
-        _fill_date_input(page, '#fromDate', from_date)
-    if to_date:
-        _fill_date_input(page, '#toDate', to_date)
+    if not triggered:
+        page.keyboard.press("Enter")
+        logger.info("已按 Enter 触发查询")
 
-    if from_date or to_date:
-        time.sleep(0.5)
-        triggered = False
-        for sel in [
-            'button:has(.uf-search-light-2)',
-            '.uf-search-light-2',
-            'button:has-text("查询")',
-            'button:has-text("搜索")',
-        ]:
-            btn = page.query_selector(sel)
-            if btn:
-                try:
-                    btn.click()
-                    triggered = True
-                    logger.debug("已点击查询按钮: %s", sel)
-                    break
-                except Exception:
-                    continue
-        if not triggered:
-            page.keyboard.press("Enter")
-            logger.debug("已按 Enter 触发查询")
-        time.sleep(3)
-
-
-def _fill_date_input(page: Page, selector: str, value: str):
-    inp = page.query_selector(selector)
-    if inp:
-        inp.click()
-        time.sleep(0.3)
-        inp.fill('')
-        inp.type(value, delay=50)
-        logger.debug("已填写 %s: %s", selector, value)
+    time.sleep(3)
+    wait_spinner_gone(page, timeout=15)
 
 
 def change_page_size(page: Page, page_size: int = 100):
