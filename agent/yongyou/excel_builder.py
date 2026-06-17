@@ -167,6 +167,10 @@ def build_stat_excel(
         special_by_suffix = _index_files_by_suffix(special_dir)
         danger_by_suffix = _index_files_by_suffix(danger_dir)
 
+        logger.info("[%s] 图片索引: 饼图=%d 原图=%d 判级识别图=%d 夹杂物图=%d 危险物图=%d",
+                    plate, len(pie_files), len(raw_by_suffix),
+                    len(grading_by_suffix), len(special_by_suffix), len(danger_by_suffix))
+
         # 车底图（第一个板块的 Row 5 专用）
         file_hash = _find_hash(vehicle_dir)
         finish_img = raw_dir / f"{file_hash}-finish.jpg"
@@ -225,6 +229,8 @@ def build_stat_excel(
                     ws.add_image(img, cell.coordinate)
                 except Exception as e:
                     logger.warning("插入原图失败 %s: %s", raw_file.name, e)
+            else:
+                logger.debug("[%s] 原图 suffix=%d 未找到", plate, suffix)
 
             grading_file = grading_by_suffix.get(suffix)
             if grading_file and grading_file.exists():
@@ -238,6 +244,8 @@ def build_stat_excel(
                     ws.add_image(img, cell.coordinate)
                 except Exception as e:
                     logger.warning("插入判级识别图失败 %s: %s", grading_file.name, e)
+            else:
+                logger.debug("[%s] 判级识别图 suffix=%d 未找到", plate, suffix)
 
             ws.row_dimensions[img_row].height = 70
 

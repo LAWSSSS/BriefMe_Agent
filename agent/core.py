@@ -1524,39 +1524,48 @@ class SteelCoilAgent:
         output_dir: str = None,
     ) -> Dict[str, Any]:
         try:
-            from agent.yongyou.config import create_settings
+            from agent.yongyou.config import create_settings, DEFAULT_DOWNLOAD_DIR
             from agent.yongyou.pipeline import run as run_yongyou
 
-            dl_dir = Path(output_dir) if output_dir else None
-            if dl_dir is None:
-                from agent.yongyou.config import DEFAULT_DOWNLOAD_DIR
-                sd = start_date.strip() or (date.today() - timedelta(days=1)).isoformat()
-                ed = end_date.strip() or sd
-                if sd == ed:
-                    date_folder = sd
-                else:
-                    date_folder = f"{sd}-{ed}"
-                dl_dir = DEFAULT_DOWNLOAD_DIR / date_folder
-            settings_yy = create_settings(
-                username=username.strip(),
-                password=password.strip(),
-                base_url="http://172.26.46.12:8890",
-                download_dir=dl_dir,
-            )
+            sd = start_date.strip() or (date.today() - timedelta(days=1)).isoformat()
+            ed = end_date.strip() or sd
 
-            reports = run_yongyou(
-                settings=settings_yy,
-                start_date=start_date,
-                end_date=end_date,
-            )
+            # 按天拆分：一天一个文件夹 + 一天一个 Excel
+            d_start = date.fromisoformat(sd)
+            d_end = date.fromisoformat(ed)
+            dates: list[str] = []
+            d = d_start
+            while d <= d_end:
+                dates.append(d.isoformat())
+                d += timedelta(days=1)
+
+            all_reports: list = []
+            excel_paths: list[str] = []
+
+            for day in dates:
+                dl_dir = Path(output_dir) if output_dir else (DEFAULT_DOWNLOAD_DIR / day)
+                settings_yy = create_settings(
+                    username=username.strip(),
+                    password=password.strip(),
+                    base_url="http://172.26.46.12:8890",
+                    download_dir=dl_dir,
+                )
+                reports = run_yongyou(
+                    settings=settings_yy,
+                    start_date=day,
+                    end_date=day,
+                )
+                all_reports.extend(reports)
+                for r in reports:
+                    if r.excel_path:
+                        excel_paths.append(r.excel_path)
 
             lines: list[str] = []
             lines.append("==================== 汇总 ====================")
             total_saved = 0
             total_failed = 0
             total_skipped_grade = 0
-            excel_path = ""
-            for r in reports:
+            for r in all_reports:
                 lines.append(
                     f"{r.date}: 处理 {r.processed} 辆车，"
                     f"保存 {r.saved_files} 张，"
@@ -1567,12 +1576,12 @@ class SteelCoilAgent:
                 total_saved += r.saved_files
                 total_failed += r.failed_files
                 total_skipped_grade += r.skipped_grade
-                if r.excel_path:
-                    excel_path = r.excel_path
             lines.append("==============================================")
-            lines.append(f"\n图片保存目录: {settings_yy.download_dir}")
-            if excel_path:
-                lines.append(f"\n统计 Excel: {excel_path}")
+            lines.append(f"\n图片保存目录: {DEFAULT_DOWNLOAD_DIR}")
+            if excel_paths:
+                lines.append(f"\n统计 Excel:")
+                for p in excel_paths:
+                    lines.append(f"  - {p}")
             info = "\n".join(lines)
 
             return {
