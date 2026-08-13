@@ -243,8 +243,14 @@ class DailyShenglongStats:
 
     @property
     def deduction_evaluable(self) -> int:
-        """扣杂可评估的车数（双方扣重均非空）"""
-        return sum(1 for t in self.trucks if t.deduction_compliant is not None)
+        """扣杂可评估的车数（AI 扣重与人工扣重均非空，且 AI 扣重不为 0）"""
+        return sum(
+            1
+            for t in self.trucks
+            if t.deduction_compliant is not None
+            and t.ai_deduct_ton is not None
+            and t.ai_deduct_ton != 0
+        )
 
     @property
     def recognition_rate(self) -> Optional[float]:
@@ -256,7 +262,7 @@ class DailyShenglongStats:
 
     @property
     def deduction_compliance_rate(self) -> Optional[float]:
-        """扣杂符合率（%）：扣杂准确 / 可评估扣杂车数"""
+        """扣杂符合率（%）：扣杂准确 / 可评估扣杂车数（剔除 AI 扣重为 0 的车）"""
         n = self.deduction_evaluable
         if n == 0:
             return None

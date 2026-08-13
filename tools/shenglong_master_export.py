@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "启用重废1/2/3归一化准确率口径：只看重废1/2/3，"
-            "先把这三类占比归一化到 100%，再判断主重废类和差异≤10%"
+            "先把这三类占比归一化到 100%%，再判断主重废类和差异≤10%%"
         ),
     )
     args = parser.parse_args(argv)
