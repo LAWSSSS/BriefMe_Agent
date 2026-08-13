@@ -28,8 +28,10 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from agent.shenglong.dict import (
@@ -53,6 +55,8 @@ if TYPE_CHECKING:
     from agent.shenglong.models import PeriodSummary
 
 logger = logging.getLogger(__name__)
+
+EXCLUSION_LOG_PATH = Path(__file__).resolve().parents[2] / "deduction_exclusion_log.json"
 
 # 主料型正确的差异值容忍度（%）：料型一致且 |人工占比-AI占比| ≤ 该值 才算主料正确
 MAIN_TYPE_DIFF_TOLERANCE: float = 10.0
@@ -94,6 +98,24 @@ def _first_scalar(value):
     if isinstance(value, list):
         return value[0] if value else None
     return value
+
+
+def _append_exclusion_json_log(record: dict) -> None:
+    EXCLUSION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = EXCLUSION_LOG_PATH.read_text(encoding="utf-8")
+        data = json.loads(existing) if existing.strip() else []
+        if not isinstance(data, list):
+            data = []
+    except FileNotFoundError:
+        data = []
+    except json.JSONDecodeError:
+        data = []
+
+    data.append(record)
+    EXCLUSION_LOG_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _safe_float(value) -> Optional[float]:
@@ -281,19 +303,36 @@ def calc_truck(
             stat.main_same = False
 
     # -------- 派生：扣重比值 / 误差 --------
-    if stat.manual_deduct_ton is not None and stat.ai_deduct_ton is not None:
+    # AI totalDeductWeight = 0 时，视为该车不参与扣杂车辆统计
+    if stat.ai_deduct_ton == 0:
+        exclusion_record = {
+            "event": "exclude_deduction_vehicle",
+            "date": stat.date,
+            "carNumber": stat.car_number,
+            "stationNumber": stat.station_number,
+            "flowCode": stat.flow_code,
+            "aiTotalDeductWeight": 0,
+            "manualDeductTon": stat.manual_deduct_ton,
+            "reason": "ai_total_deduct_weight_is_zero",
+        }
+        logger.info(json.dumps(exclusion_record, ensure_ascii=False))
+        _append_exclusion_json_log(exclusion_record)
+        stat.weight_diff_ton = None
+        stat.weight_ratio = None
+        stat.deduction_compliant = None
+    elif stat.manual_deduct_ton is not None and stat.ai_deduct_ton is not None:
         stat.weight_diff_ton = abs(stat.ai_deduct_ton - stat.manual_deduct_ton)
         if stat.manual_deduct_ton != 0:
             stat.weight_ratio = stat.ai_deduct_ton / stat.manual_deduct_ton
         else:
             stat.weight_ratio = None
+        stat.deduction_compliant = _judge_deduction_compliance(
+            stat.weight_ratio, stat.weight_diff_ton, cfg
+        )
     else:
         stat.weight_diff_ton = None
         stat.weight_ratio = None
-
-    stat.deduction_compliant = _judge_deduction_compliance(
-        stat.weight_ratio, stat.weight_diff_ton, cfg
-    )
+        stat.deduction_compliant = None
 
     # -------- 派生：单价差异 --------
     if stat.manual_steel_price is not None and stat.ai_steel_price is not None:

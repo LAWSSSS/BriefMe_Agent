@@ -1,7 +1,5 @@
-"""Accuracy report package."""
+"""永锋废钢检判图片下载。"""
 
-from .calculator import compute_accuracy
-from .client import HttpConfig, fetch_raw_data
-from .excel_writer import write_report
+from .downloader import download_images_by_date_range
 
-__all__ = ["HttpConfig", "fetch_raw_data", "compute_accuracy", "write_report"]
+__all__ = ["download_images_by_date_range"]

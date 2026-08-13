@@ -1106,7 +1106,7 @@ def _write_summary_box(
         (
             f"识别准确率90：{'N/A' if r is None else f'{r:.2f}%'}"
             f" / 识别准确率85：{'N/A' if r15 is None else f'{r15:.2f}%'}"
-            f"  (目标 ≥ {int(target_c * 100)}%)"
+            f"  (目标 ≥ {int(target_r * 100)}% / 85%)"
         ),
         f"扣杂可评估车数：{dd_eval}    扣杂符合车数：{dd_ok}",
         (

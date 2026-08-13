@@ -1,7 +1,7 @@
 """永锋烧结矿准确率端到端 CLI：取数 → 计算 → 出 JSON / xlsx
 
 用法：
-  python tools/yongfeng_export.py --start 2026-05-15 00:00:00 --end 2026-05-15 23:59:59
+  python tools/yongfeng_export.py --start 2026-07-31 00:00:00 --end 2026-08-06 23:59:59
   python tools/yongfeng_export.py --start 2026-05-15 00:00:00 --end 2026-05-15 23:59:59 --output downloads/yongfeng/烧结矿颗粒度准确率统计_2026-05-15_2026-05-15.xlsx
 
 默认读取 config/settings.py 中的永锋地址配置，避免在 README 里重复写一堆 URL。

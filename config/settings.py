@@ -84,6 +84,16 @@ class ShenglongConfig:
 
 
 @dataclass
+class YongfengScrapConfig(ShenglongConfig):
+    """永锋废钢图片下载配置，与盛隆配置完全分离。"""
+
+    base_url: str = "http://vision.lg.china-yongfeng.com/srape-steel"
+    employee_id: str = "022232"
+    password: str = "0123456"
+    cookie_name: str = "satoken"
+
+
+@dataclass
 class VPNConfig:
     """aTrust VPN 配置"""
 
@@ -109,7 +119,7 @@ class TencentDocsConfig:
     access_token: str = os.getenv("TENCENT_DOCS_ACCESS_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHQiOiI4NjUxNmY3ZWI2N2M0ZjZiOTIyNDk5ZjE3MDg2MjY2MiIsInR5cCI6MSwiZXhwIjoxNzgyNjE4MzI3LjYxNzAzLCJpYXQiOjE3ODAwMjYzMjcuNjE3MDMsInN1YiI6ImZhZGNkOWI1Yjg0MzQ1M2I4NzY2N2JmMjczZDQyOWJhIn0.jjjy2B4aZZ-WFBpsgO-rYg9-iLVDccOS4GzMiOj-7s0")
     client_id: str = os.getenv("TENCENT_DOCS_CLIENT_ID", "86516f7eb67c4f6b922499f170862662")
     open_id: str = os.getenv("TENCENT_DOCS_OPEN_ID", "fadcd9b5b843453b87667bf273d429ba")
-    enabled: bool = os.getenv("TENCENT_DOCS_ENABLED", "1") == "1"
+    enabled: bool = os.getenv("TENCENT_DOCS_ENABLED", "0") == "1"
 
 
 @dataclass
@@ -122,7 +132,7 @@ class YongfengConfig:
     account: str = "22499"
     password: str = "544bc44fb14b08be2557d80242c48783"
     visual_1_base_url: str = "http://vision.lg.china-yongfeng.com"
-    visual_2_base_url: str = "http://vision.test.lg.china-yongfeng.com"
+    visual_2_base_url: str = "http://vision.lg.china-yongfeng.com"
     visual_username: str = "test"
     visual_password: str = "Cisdi_mv@8888"
     analysis_token: str = (
@@ -141,6 +151,7 @@ class Settings:
     yongfeng: YongfengConfig = field(default_factory=YongfengConfig)
     scrap: ScrapConfig = field(default_factory=ScrapConfig)
     shenglong: ShenglongConfig = field(default_factory=ShenglongConfig)
+    yongfeng_scrap: YongfengScrapConfig = field(default_factory=YongfengScrapConfig)
     analysis_token: str = os.getenv("ANALYSIS_TOKEN", "")
     analysis_api_code: str = os.getenv("ANALYSIS_API_CODE", "st2")
 
