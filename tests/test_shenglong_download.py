@@ -51,7 +51,17 @@ def test_folder_and_filename_match_screenshot():
 
     name = build_image_filename("2026-08-27", "53", 1, shares, 10)
     assert name == (
-        "2026_08_27_53_1_medium_40_zhongfei1_30_zhongfei3_20_houjian_10_10.jpg"
+        "20260827_medium_40_zhongfei1_30_zhongfei3_20_houjian_10_53_1_10.jpg"
+    )
+    sample = parse_manual_shares(
+        [
+            {"steelType": 1, "avgRate": 0.80},
+            {"steelType": 2, "avgRate": 0.10},
+            {"steelType": 13, "avgRate": 0.10},
+        ]
+    )
+    assert build_image_filename("2026-08-26", "53", 5, sample, 14) == (
+        "20260826_zhongfei1_80_zhongfei2_10_houjian_10_53_5_14.jpg"
     )
     print("folder/filename OK")
 
