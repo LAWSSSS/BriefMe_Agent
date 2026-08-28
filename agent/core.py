@@ -15,19 +15,42 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from zhipuai import ZhipuAI
-
 from agent.data_fetcher import VisionAPIClient
+from agent.llm_client import OpenAICompatClient
+from agent.shenglong.downloader import download_images_by_date_range
+from agent.shenglong.packager import pack_multilabel_from_disk
 from agent.tools import TOOLS
 from agent.vpn_manager import VPNManager
 from config.settings import settings
 from agent.yongfeng.main import run_report as run_yongfeng_report
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_save_path(text: str) -> str:
+    """从用户回复里抽出本机保存路径。"""
+    raw = (text or "").strip().strip("`").strip()
+    labeled = re.search(
+        r"(?:保存地址|保存路径|保存到|路径|output_dir)\s*[：:]\s*(.+)",
+        raw,
+    )
+    candidate = labeled.group(1).strip() if labeled else raw
+    candidate = candidate.strip().strip('"').strip("'")
+    if not candidate:
+        return ""
+    if candidate in {"默认", "default", "空"}:
+        return ""
+    path = Path(candidate).expanduser()
+    if candidate.startswith("/") or candidate.startswith("~") or path.drive:
+        return str(path)
+    if re.match(r"^[A-Za-z]:[\\/]", candidate):
+        return candidate
+    return ""
 
 
 def _fmt_date_short(date_str: str) -> str:
@@ -108,7 +131,11 @@ def _build_system_prompt() -> str:
         "  - shenglong_get_daily_summary  /  shenglong_get_range_summary  /  shenglong_export_report\n"
         "  - shenglong_export_master_report （多周期主表：所有周期累积到一个 xlsx）\n"
         "  - shenglong_export_heavy_master_report （重废1/2/3归一化口径多周期主表）\n"
-        "  - download_shenglong_images （批量下载盛隆工厂监控图像，支持日期范围）\n"
+        "  - download_shenglong_images （从 3000 业务系统下载智能判级原图并按车次命名/打包；禁止走 MinIO）\n"
+        "    该工具必须带上用户指定的本机保存路径 output_dir。"
+        "    若用户没给路径，仍先调用工具并把 output_dir 设为空字符串，系统会追问路径。"
+        "    每个日期的车次文件夹下完后会 scp 到推理测试机；scp 失败只在总结里说明，不中断下载。\n"
+        "  - pack_shenglong_multilabel （人工筛图后，确认打包废钢多标签分类数据集）\n"
         "    （盛隆暂不支持 PPT 生成）\n\n"
         "【永锋烧结矿颗粒度准确率】工具（yongfeng_ 前缀）：\n"
         "  - yongfeng_export_accuracy_report （指定时间范围内的人工筛分 vs 视觉准确率报表）\n"
@@ -145,10 +172,20 @@ def _build_system_prompt() -> str:
         "   → 走 bxsteel_download_images 工具。即使没有凭证也先调用，系统会弹出输入提示。\n"
         "9. 用户说【下载用友检判结果图 / 用友图片下载 / 用友检判图 / 用友检判统计 / 下载用友质检判级图】\n"
         "   → 走 yongyou_download_images 工具。即使没有凭证也先调用，系统会弹出输入提示。\n"
+        "10. 用户说【下载盛隆检判原图 / 盛隆图像下载 / 3000网站图像下载 / 智能判级照片】\n"
+        "   → 走 download_shenglong_images。只走 3000 业务系统，不要提 MinIO。\n"
+        "   必须带上保存路径；路径可来自用户原文或页面「保存路径」输入框。\n"
+        "   单日：start_date=end_date；连续区间：start_date 到 end_date；"
+        "   多个不连续日期（顿号/逗号分隔）：填 dates 数组，不要把中间天补进去。\n"
+        "   下载完成后不要自动打「废钢多标签分类数据集」。等用户说【确认打包 / 打包多标签】"
+        "   再调用 pack_shenglong_multilabel。实例/边缘分割包由下载流程自动生成。\n"
         "路由错误会引发严重现场事故，请严格遵守。\n\n"
         f"今天是{today.strftime('%Y-%m-%d')}，"
         f"昨天是{yesterday.strftime('%Y-%m-%d')}，"
-        f"前天是{day_before.strftime('%Y-%m-%d')}。\n\n"
+        f"前天是{day_before.strftime('%Y-%m-%d')}。\n"
+        "盛隆「近7天 / 近一周」报表：统计区间必须是昨天往前共 7 个自然日"
+        "（含昨天、不含今天）。例如今天是 2026-08-27，则 "
+        "start_date=2026-08-20、end_date=2026-08-26。不要把今天算进去。\n\n"
         "=============== 永锋烧结矿准确率输出格式 ===============\n"
         "收到永锋烧结矿准确率工具返回的数据后，直接输出结果摘要，不要编造数值。\n"
         "若返回 xlsx_path，优先告诉用户报表已生成并给出文件路径。\n\n"
@@ -206,7 +243,7 @@ def _build_system_prompt() -> str:
         "工具返回 xlsx_path、cycle_count、cycles[*] 关键指标后，回复模板：\n"
         "  ✅ 已生成盛隆主表（共 N 个有效周期）：<原样粘贴 xlsx_path>\n"
         "  · 第 1 期 周期标签：识别率 X.XX% / 扣重符合率 X.XX%\n"
-        "  · 第 2 期 ... （识别率环比变化 ↑X.XX% 或 ↓X.XX% ; 累计 X.XX%）\n"
+        "  · 第 2 期 ... （识别率 X.XX% / 扣重符合率 X.XX%）\n"
         "  ...\n\n"
         "=============== 镔鑫 PPT 生成（仅镔鑫支持）===============\n"
         "用户在镔鑫场景下说【生成对应的 ppt / 生成 PPT / 做一页汇报图 / 出趋势图 / "
@@ -232,12 +269,17 @@ class SteelCoilAgent:
         self.fetcher = VisionAPIClient()
         self._scrap_client = None  # 惰性初始化，避免未用废钢功能时报错
         self._shenglong_client = None
-        self.client: Optional[ZhipuAI] = None
+        self.client: Optional[OpenAICompatClient] = None
         self._bxsteel_pending_args: Optional[Dict[str, Any]] = None  # 待下载的 bxsteel 参数
         self._yongyou_pending_args: Optional[Dict[str, Any]] = None  # 待下载的用友参数
+        self._shenglong_pending_args: Optional[Dict[str, Any]] = None
+        self._default_shenglong_output_dir: str = ""
 
         if settings.llm.api_key:
-            self.client = ZhipuAI(api_key=settings.llm.api_key)
+            self.client = OpenAICompatClient(
+                api_key=settings.llm.api_key,
+                base_url=settings.llm.base_url,
+            )
 
     @property
     def scrap_client(self):
@@ -275,8 +317,8 @@ class SteelCoilAgent:
         """
         if not self.client:
             return (
-                "未配置智谱 API Key。请设置环境变量：\n"
-                "`export ZHIPU_API_KEY=你的密钥`\n"
+                "未配置模型 API Key。请在项目根目录创建 .env，写入：\n"
+                "`DEEPSEEK_API_KEY=你的密钥`\n"
                 "然后重启程序。",
                 session,
             )
@@ -297,6 +339,9 @@ class SteelCoilAgent:
 
         if vpn_state == "waiting_yongyou_creds":
             return self._handle_yongyou_creds(user_message, session)
+
+        if vpn_state == "waiting_shenglong_dir":
+            return self._handle_shenglong_dir(user_message, session)
 
         return self._process_message(user_message, session)
 
@@ -482,6 +527,43 @@ class SteelCoilAgent:
         })
         return result.get("summary_text", "下载完成"), session
 
+    def _handle_shenglong_dir(
+        self, user_input: str, session: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
+        pending = self._shenglong_pending_args
+        if not pending:
+            session["vpn_state"] = "unknown"
+            return self._process_message(user_input, session)
+
+        output_dir = _parse_save_path(user_input)
+        if not output_dir:
+            return (
+                "还没有识别到本机路径。请按下面格式回复：\n\n"
+                "```\n"
+                "保存地址：/Users/你的用户名/Desktop/盛隆图像\n"
+                "```",
+                session,
+            )
+
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        if not pending.get("start_date"):
+            pending["start_date"] = yesterday
+        if not pending.get("end_date"):
+            pending["end_date"] = pending["start_date"]
+        pending["output_dir"] = output_dir
+
+        session["vpn_state"] = "unknown"
+        self._shenglong_pending_args = None
+        result = self._tool_download_shenglong_images(
+            pending.get("start_date", ""),
+            pending.get("end_date", ""),
+            pending.get("output_dir"),
+            pending.get("dates"),
+        )
+        text = result.get("summary_text", "下载完成")
+        session["messages"].append({"role": "assistant", "content": text})
+        return text, session
+
     # ------------------------------------------------------------------
     #  核心消息处理：LLM 意图解析 → 工具调用 → 格式化回复
     # ------------------------------------------------------------------
@@ -499,7 +581,7 @@ class SteelCoilAgent:
                 tools=TOOLS,
             )
         except Exception as e:
-            logger.error("GLM 调用失败: %s", e)
+            logger.error("LLM 调用失败: %s", e)
             messages.pop()
             return f"LLM 调用失败: {e}", session
 
@@ -514,7 +596,7 @@ class SteelCoilAgent:
         tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
         # 盛隆图像下载、镔鑫球机图像下载、用友图片下载工具不需要检查永锋 VPN
         any_packing_tool = any(
-            not n.startswith("scrap_") and not n.startswith("shenglong_") and not n.startswith("bxsteel_") and not n.startswith("yongyou_") and n != "download_shenglong_images"
+            not n.startswith("scrap_") and not n.startswith("shenglong_") and not n.startswith("bxsteel_") and not n.startswith("yongyou_") and n != "download_shenglong_images" and n != "pack_shenglong_multilabel"
             for n in tool_names
         )
 
@@ -562,6 +644,42 @@ class SteelCoilAgent:
                         session,
                     )
 
+            if func_name == "download_shenglong_images":
+                try:
+                    args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+                dest = str(
+                    args.get("output_dir") or self._default_shenglong_output_dir or ""
+                ).strip()
+                if not dest:
+                    self._shenglong_pending_args = args
+                    session["vpn_state"] = "waiting_shenglong_dir"
+                    messages.pop()
+                    return (
+                        "盛隆检判原图会立刻写到你的电脑上。请先给出保存路径：\n\n"
+                        "```\n"
+                        "保存地址：/Users/你的用户名/Desktop/盛隆图像\n"
+                        "```\n\n"
+                        "也可以先在左侧「图像保存路径」框里填好，再重新发送下载指令。",
+                        session,
+                    )
+                args["output_dir"] = dest
+                result = self._tool_download_shenglong_images(
+                    args.get("start_date", ""),
+                    args.get("end_date", ""),
+                    args.get("output_dir"),
+                    args.get("dates"),
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": json.dumps(result, ensure_ascii=False),
+                        "tool_call_id": tool_call.id,
+                    }
+                )
+                continue
+
             # 用友图片下载：始终弹出凭证输入提示（不走 LLM 自动填充）
             if func_name == "yongyou_download_images":
                 try:
@@ -598,7 +716,7 @@ class SteelCoilAgent:
                 tools=TOOLS,
             )
         except Exception as e:
-            logger.error("GLM 二次调用失败: %s", e)
+            logger.error("LLM 二次调用失败: %s", e)
             return f"LLM 调用失败: {e}", session
 
         reply = final.choices[0].message.content or ""
@@ -623,14 +741,19 @@ class SteelCoilAgent:
                 args.get("start_date", ""), args.get("end_date", "")
             )
 
-                # 盛隆图像下载工具
         if func_name == "download_shenglong_images":
-            result_str = self._tool_download_shenglong_images(
+            return self._tool_download_shenglong_images(
                 start_date=args.get("start_date", ""),
                 end_date=args.get("end_date", ""),
-                output_dir=args.get("output_dir", None)
+                output_dir=args.get("output_dir") or None,
+                dates=args.get("dates"),
             )
-            return {"summary_text": result_str}
+
+        if func_name == "pack_shenglong_multilabel":
+            return self._tool_pack_shenglong_multilabel(
+                output_dir=args.get("output_dir") or None,
+                dates=args.get("dates"),
+            )
 
         # =====================================================
         # 废钢工具分支
@@ -1361,56 +1484,93 @@ class SteelCoilAgent:
             ),
         }
 
-    def _tool_download_shenglong_images(self, start_date: str, end_date: str, output_dir: str = None) -> Dict[str, Any]:
-        """下载盛隆工厂监控图像并打包为 ZIP"""
-        from agent.shenglong.minio_downloader import download_and_pack
-        from datetime import datetime, timedelta
-        from minio import Minio
-        from pathlib import Path
-        
-        try:
-            # 获取文件总数（用于显示）
-            start = datetime.strptime(start_date, "%Y-%m-%d").date()
-            end = datetime.strptime(end_date, "%Y-%m-%d").date()
-            
-            from agent.shenglong.minio_downloader import MINIO_HOST, MINIO_API_PORT, BUCKET, PREFIX_BASE, ACCESS_KEY, SECRET_KEY
-            
-            client = Minio(
-                f"{MINIO_HOST}:{MINIO_API_PORT}",
-                access_key=ACCESS_KEY,
-                secret_key=SECRET_KEY,
-                secure=False,
-            )
-            
-            total_files = 0
-            current = start
-            while current <= end:
-                prefix = f"{PREFIX_BASE}/{current.isoformat()}/"
-                try:
-                    objects = list(client.list_objects(BUCKET, prefix=prefix, recursive=True))
-                    files = [o for o in objects if o.size and o.size > 0]
-                    total_files += len(files)
-                except:
-                    pass
-                current += timedelta(days=1)
-            
-            start_msg = f"📥 正在下载 {start_date} 到 {end_date} 的监控图像，共 {total_files} 个文件\n\n点击「📋 下载实时日志」面板中的「🔄 手动刷新日志」按钮查看下载进度。\n\n下载完成后我会通知你，并提供 ZIP 下载链接。"
-            
-            zip_path, success, failed = download_and_pack(start_date, end_date)
-            
-            if zip_path is None:
-                return {"summary_text": f"❌ 下载失败：没有找到文件"}
-            
-            final_msg = f"\n\n✅ 下载完成！成功 {success} 个文件，失败 {failed} 个\n\n点击下方按钮下载 ZIP 文件到本地。"
-            
+    def _tool_download_shenglong_images(
+        self,
+        start_date: str,
+        end_date: str,
+        output_dir: str = None,
+        dates: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """从 3000 业务系统下载智能判级原图，立刻写到本地路径。"""
+        dest = (output_dir or self._default_shenglong_output_dir or "").strip()
+        if not dest:
             return {
-                "summary_text": start_msg + final_msg,
-                "zip_file": zip_path
+                "summary_text": (
+                    "还缺保存路径。请回复：\n"
+                    "保存地址：/Users/你的用户名/Desktop/盛隆图像"
+                )
             }
-        except Exception as e:
-            logger.error(f"下载图像失败: {e}")
-            return {"summary_text": f"❌ 下载失败: {e}"}
+        if not dates and not start_date:
+            return {"summary_text": "请指定日期，格式 YYYY-MM-DD"}
+        if not end_date:
+            end_date = start_date
+        try:
+            result = download_images_by_date_range(
+                start_date,
+                end_date,
+                output_dir=dest,
+                dates=dates,
+            )
+        except Exception as exc:
+            logger.error("盛隆检判原图下载失败: %s", exc)
+            return {"summary_text": f"❌ 下载失败: {exc}"}
 
+        zips = result.get("zip_files") or []
+        zip_lines = "\n".join(f"- {p}" for p in zips) if zips else "- （本区间没有可打包的原图）"
+        date_label = "、".join(result.get("dates") or dates or [start_date, end_date])
+        scp_text = result.get("scp_report") or ""
+        text = (
+            f"✅ 盛隆检判原图已直接写入本地（3000 业务系统，不走 MinIO）\n"
+            f"日期：{date_label}\n"
+            f"目录：{result.get('output_dir')}\n"
+            f"新下载 {result.get('success', 0)} 张，跳过已有 {result.get('skipped_existing', 0)} 张，"
+            f"失败 {result.get('failed', 0)} 张\n"
+            f"进度日志：{result.get('output_dir')}/download_progress.log\n"
+            f"实例/边缘分割包：\n{zip_lines}\n"
+            f"{scp_text}\n"
+            f"「废钢多标签分类数据集」还没有打。"
+            f"请打开各日期各车次文件夹删掉不合格图，然后发送：确认打包废钢多标签分类数据集"
+        )
+        return {
+            "summary_text": text,
+            "output_dir": result.get("output_dir"),
+            "zip_files": zips,
+            "success": result.get("success", 0),
+            "failed": result.get("failed", 0),
+        }
+
+    def _tool_pack_shenglong_multilabel(
+        self,
+        output_dir: str = None,
+        dates: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        dest = (output_dir or self._default_shenglong_output_dir or "").strip()
+        if not dest:
+            return {
+                "summary_text": (
+                    "还缺保存路径。请先在左侧填写「图像保存路径」，或回复：\n"
+                    "保存地址：/Users/你的用户名/Desktop/盛隆图像"
+                )
+            }
+        try:
+            result = pack_multilabel_from_disk(dest, dates=dates)
+        except Exception as exc:
+            logger.error("多标签打包失败: %s", exc)
+            return {"summary_text": f"❌ 打包失败: {exc}"}
+
+        lines = ["✅ 已按人工筛完后的原图打包「废钢多标签分类数据集」"]
+        for day in result.get("days") or []:
+            if day.get("skipped"):
+                lines.append(f"- {day.get('date')}: 没有可打包的图，已跳过")
+            else:
+                lines.append(f"- {day.get('date')}: {day.get('images')} 张 → {day.get('zip')}")
+        if not result.get("zip_files"):
+            lines.append("没有生成任何压缩包。请确认目录里还有车次图片。")
+        return {
+            "summary_text": "\n".join(lines),
+            "output_dir": result.get("output_dir"),
+            "zip_files": result.get("zip_files") or [],
+        }
 
     def _tool_yongfeng_export_accuracy_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
         required_fields = ["start_time", "end_time"]

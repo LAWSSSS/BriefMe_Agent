@@ -241,7 +241,7 @@ def test_calc():
     assert t3.ai_main.steel_type == 1  # 16 被剔除，剩下 1(45%) 和 11(15%) → 1 胜
     # 差异值 = |30 - 45| = 15，仍然计算出来
     assert abs(t3.diff_rate - 15.0) < 1e-6
-    # 新规则：料型一致但差异 15% > 10% → 主料型不正确
+    # 料型一致但差异 15% ≥ 11% → 主料型不正确
     assert t3.main_same is False
 
     print("calc OK")
@@ -269,11 +269,11 @@ def test_aggregate_and_summary():
 
     assert stats.total_trucks == 3
     assert stats.judgable_trucks == 3  # 三辆车人工 AI 主料都非空
-    # 新规则：t1 diff=5% ≤ 10% → 正确；t3 diff=15% > 10% → 不正确
+    # t1 diff=5% < 11% → 正确；t3 diff=15% ≥ 11% → 不正确
     assert stats.main_same_count == 1  # 仅 t1
     # 识别率 = 1/3 = 33.33%
     assert abs(stats.recognition_rate - 1 / 3 * 100.0) < 1e-6
-    # 扣杂评估：3 辆车都有扣重 → 3；合格：t1、t3（t3 diff 0.005 < 0.15 → ok）
+    # 扣杂评估：3 辆车都有扣重 → 3；合格：t1、t3（t3 diff 0.005 < 0.151 → ok）
     assert stats.deduction_evaluable == 3
     assert stats.deduction_compliant_count == 2
     assert abs(stats.deduction_compliance_rate - 2 / 3 * 100.0) < 1e-6
@@ -325,7 +325,7 @@ def test_period_summary_aggregation():
     assert period.judgable_trucks == 3
     # 名字一致：t1（同 1）、t3（同 1）→ 2；t2 名字不同 → False
     assert period.main_name_match_count == 2
-    # 名字一致 AND 差异≤10%：仅 t1（5%）→ 1；t3 是 15% 不算
+    # 名字一致 AND 差异<11%：仅 t1（5%）→ 1；t3 是 15% 不算
     assert period.main_within_10pct_count == 1
     assert abs(period.recognition_rate_pct - 1 / 3 * 100.0) < 1e-6
     # 扣杂：t1 / t3 合格，t2 不合格 → 2/3
@@ -361,21 +361,27 @@ def test_excel_with_summary_sheet():
     assert wb.sheetnames == ["统计周期概括", "累计统计", "检判统计详情"]
 
     ws = wb["统计周期概括"]
-    # row 1 周期标签
     assert ws.cell(row=1, column=2).value == "统计周期"
-    assert "2026.4.22" in str(ws.cell(row=1, column=3).value)
-    # row 2 周期内有效检判车次数
-    assert ws.cell(row=2, column=3).value == 3
-    # row 6 主料型相同/差异<10% 数值
-    assert ws.cell(row=6, column=2).value == 2
-    assert ws.cell(row=6, column=3).value == 1
-    # row 6 D 列写入的是公式
-    assert str(ws.cell(row=6, column=4).value).startswith("=IFERROR(")
-    # row 13 价格分桶
-    assert ws.cell(row=13, column=2).value == 1
-    assert ws.cell(row=13, column=3).value == 0
-    assert ws.cell(row=13, column=4).value == 1
-    assert ws.cell(row=13, column=5).value == 1
+    assert "2026.4.22" in str(ws.cell(row=1, column=5).value)
+    assert ws.cell(row=2, column=2).value == "周期内有效检判车次数"
+    assert ws.cell(row=2, column=5).value == 3
+    assert ws.cell(row=3, column=2).value == "周期内有效扣重车次数"
+    assert ws.cell(row=3, column=5).value == 3
+    assert ws.cell(row=4, column=2).value == "识别率"
+    assert "小于11%" in str(ws.cell(row=6, column=3).value)
+    assert ws.cell(row=7, column=2).value == 2
+    assert ws.cell(row=7, column=3).value == 1
+    assert str(ws.cell(row=7, column=4).value).startswith("=IFERROR(")
+    assert str(ws.cell(row=7, column=5).value).startswith("=IFERROR(")
+    assert "环比" not in {
+        ws.cell(row=rr, column=cc).value
+        for rr in range(1, 18)
+        for cc in range(1, 8)
+    }
+    assert ws.cell(row=16, column=2).value == 1
+    assert ws.cell(row=16, column=3).value == 0
+    assert ws.cell(row=16, column=5).value == 1
+    assert ws.cell(row=16, column=7).value == 1
 
     ws_cum = wb["累计统计"]
     assert ws_cum.cell(row=1, column=1).value == "盛隆检判累计统计"
@@ -705,52 +711,35 @@ def test_one_side_missing_not_counted():
     print("one_side_missing OK")
 
 
-def test_excel_summary_sheet1_with_prev_period():
-    """Sheet1 F/G 列：当 prev_recognition_rate 提供时写入数值 + 环比公式"""
+def test_excel_summary_sheet1_has_no_wow_columns():
+    """新版 Sheet1 不再写上周期 / 环比，即使 period 带了 prev_*。"""
     from openpyxl import load_workbook
-    from agent.shenglong.models import PeriodSummary
 
     trucks = _build_sample_trucks()
-    for t, pd in zip(trucks, [10.0, 60.0, 120.0]):
-        t.price_diff = pd
-
     day1 = aggregate_daily("2026-04-22", trucks[:2])
     day2 = aggregate_daily("2026-04-23", trucks[2:])
     period = aggregate_period([day1, day2], "2026-04-22", "2026-04-23")
-
-    # 模拟上周期：识别率 6.82%，扣重符合率 20.45%（参考表里 reference 的真实数）
     period.prev_recognition_rate = 0.0681818
     period.prev_deduction_compliance_rate = 0.2045454
-    period.prev_cycle_label = "2026-04-14 ~ 2026-04-22"
 
-    out = Path("downloads/shenglong/_unit_test/report_with_prev.xlsx")
+    out = Path("downloads/shenglong/_unit_test/report_no_wow.xlsx")
     write_stats_xlsx([day1, day2], out, period_summary=period)
-    assert out.exists()
-
-    wb = load_workbook(str(out))
-    ws = wb["统计周期概括"]
-    # F1 = "指标变化"
-    assert ws.cell(row=1, column=6).value == "指标变化"
-    # F4/G4 子表头
-    assert ws.cell(row=4, column=6).value == "上周期结果"
-    assert ws.cell(row=4, column=7).value == "环比"
-    # F5 = "识别准确率"
-    assert ws.cell(row=5, column=6).value == "识别准确率"
-    # F6 = 上周期识别率（小数）
-    assert abs(float(ws.cell(row=6, column=6).value) - 0.0681818) < 1e-6
-    # G5 = 环比公式
-    assert str(ws.cell(row=5, column=7).value).startswith("=IFERROR(")
-    assert "F6" in str(ws.cell(row=5, column=7).value)
-    # F10 = 上周期扣重符合率
-    assert abs(float(ws.cell(row=10, column=6).value) - 0.2045454) < 1e-6
-    # G9 = 扣重环比公式
-    assert str(ws.cell(row=9, column=7).value).startswith("=IFERROR(")
-    print("sheet1 with prev OK")
+    ws = load_workbook(str(out))["统计周期概括"]
+    values = {
+        ws.cell(row=rr, column=cc).value
+        for rr in range(1, 18)
+        for cc in range(1, 8)
+    }
+    assert "环比" not in values
+    assert "上周期结果" not in values
+    assert "指标变化" not in values
+    assert ws.cell(row=5, column=6).value == "目标值"
+    assert ws.cell(row=5, column=7).value == "完成情况"
+    print("sheet1 no wow OK")
 
 
 def test_master_xlsx_two_cycles_with_auto_prev_chain():
-    """多周期主表：2 个周期，Sheet1 应有 28 行，Sheet2 应有 2 段。
-    第 2 周期的 prev 自动从第 1 周期取值。"""
+    """多周期主表：2 个周期，Sheet1 应有两个 17 行块依次往下。"""
     from openpyxl import load_workbook
     from agent.shenglong.excel_writer import write_master_xlsx
 
@@ -782,25 +771,14 @@ def test_master_xlsx_two_cycles_with_auto_prev_chain():
     wb = load_workbook(str(out))
     assert wb.sheetnames == ["统计周期概括", "累计统计", "检判统计详情"]
 
-    # ---- Sheet1：两个 14 行块依次往下 ----
     ws_s = wb["统计周期概括"]
-    # 块 1（行 1~14）：A1=1, C1=周期 1 标签
     assert ws_s.cell(row=1, column=1).value == 1
-    assert "2026.4.14" in str(ws_s.cell(row=1, column=3).value)
-    # 块 2（行 15~28）：A15=2, C15=周期 2 标签
-    assert ws_s.cell(row=15, column=1).value == 2
-    assert "2026.4.23" in str(ws_s.cell(row=15, column=3).value)
-    # 块 1 首期：F6 留空 / G5 = "/"
-    assert ws_s.cell(row=6, column=6).value in (None, "")
-    assert ws_s.cell(row=5, column=7).value == "/"
-    # 块 2：F20（=15+5）应该被自动填上 = 周期 1 的识别率
-    f20 = ws_s.cell(row=20, column=6).value
-    assert f20 is not None and f20 != ""
-    expected_prev = period_a.recognition_rate_pct / 100.0
-    assert abs(float(f20) - expected_prev) < 1e-9
-    # 块 2：G19 应是环比公式（G19:G20 合并）
-    g19 = str(ws_s.cell(row=19, column=7).value)
-    assert g19.startswith("=IFERROR(")
+    assert "2026.4.14" in str(ws_s.cell(row=1, column=5).value)
+    assert ws_s.cell(row=18, column=1).value == 2
+    assert "2026.4.23" in str(ws_s.cell(row=18, column=5).value)
+    assert ws_s.cell(row=5, column=6).value == "目标值"
+    assert ws_s.cell(row=5, column=7).value == "完成情况"
+    assert ws_s.cell(row=22, column=6).value == "目标值"
 
     # ---- Sheet2：两段，每段含周期标题 ----
     ws_d = wb["检判统计详情"]
@@ -859,12 +837,8 @@ def test_master_xlsx_empty_raises():
     print("master_xlsx_empty_raises OK")
 
 
-def test_master_prev_deduction_matches_visible_sheet_formula():
-    """回归：下周期 F 列“上周期结果”必须直接等于上一周期 D 列展示口径。
-
-    Sheet1 扣重符合率 D10 的公式是 B10/C2（符合车数 / 周期内有效检判车次）。
-    旧 bug 用了 deduction_evaluable 做分母，导致 F 列和上一周期 D 列不一致。
-    """
+def test_master_summary_deduction_uses_evaluable_denominator():
+    """Sheet1 扣重符合率 = 符合车数 / 有效扣重车次（不是有效检判车次）。"""
     from openpyxl import load_workbook
     from agent.shenglong.excel_writer import write_master_xlsx
     from agent.shenglong.models import PeriodSummary
@@ -876,40 +850,20 @@ def test_master_prev_deduction_matches_visible_sheet_formula():
         judgable_trucks=51,
         main_within_10pct_count=4,
         deduction_compliant_count=24,
-        deduction_evaluable=54,  # 故意与 judgable 不同，用来复现旧 bug
-    )
-    p2 = PeriodSummary(
-        cycle_label="2026.5.14 至 2026.5.20",
-        start_date="2026-05-14",
-        end_date="2026-05-20",
-        judgable_trucks=43,
-        main_within_10pct_count=9,
-        deduction_compliant_count=16,
-        deduction_evaluable=36,
+        deduction_evaluable=52,
     )
 
-    out = Path("downloads/shenglong/_unit_test/master_prev_deduction_visible.xlsx")
-    write_master_xlsx([([], p1), ([], p2)], out)
-
-    wb = load_workbook(str(out), data_only=False)
-    ws = wb["统计周期概括"]
-    # 第 1 期 D10 可见公式 = 24 / 51
-    assert ws.cell(row=10, column=4).value == "=IFERROR(B10/C2,0)"
-    # 第 2 期 F24 必须摘抄第 1 期 D10 展示口径，而不是 24/54
-    expected_prev = 24 / 51
-    actual_prev = float(ws.cell(row=24, column=6).value)
-    assert abs(actual_prev - expected_prev) < 1e-9
-    assert abs(actual_prev - (24 / 54)) > 1e-3
-
-    # 累计符合率也使用同一展示口径：sum(符合) / sum(有效车次)
-    expected_cumulative = (24 + 16) / (51 + 43)
-    actual_cumulative = float(ws.cell(row=23, column=8).value)
-    assert abs(actual_cumulative - expected_cumulative) < 1e-9
-    print("master prev deduction visible formula OK")
+    out = Path("downloads/shenglong/_unit_test/master_deduction_denom.xlsx")
+    write_master_xlsx([([], p1)], out)
+    ws = load_workbook(str(out), data_only=False)["统计周期概括"]
+    assert ws.cell(row=3, column=5).value == 52
+    assert ws.cell(row=12, column=2).value == 24
+    assert ws.cell(row=12, column=4).value == "=IFERROR(B12/E3,0)"
+    print("master deduction denom OK")
 
 
-def test_master_xlsx_cumulative_rates_in_sheet1():
-    """累计准确率/符合率：从首期累计到当期，每期 H 列应有数值"""
+def test_master_xlsx_cumulative_rates_still_injected():
+    """累计字段仍写入 PeriodSummary，供「累计统计」页使用；Sheet1 不再展示。"""
     from openpyxl import load_workbook
     from agent.shenglong.excel_writer import write_master_xlsx
 
@@ -925,31 +879,22 @@ def test_master_xlsx_cumulative_rates_in_sheet1():
     out = Path("downloads/shenglong/_unit_test/master_cumulative.xlsx")
     write_master_xlsx(cycles, out)
 
-    # ---- 累计字段已被 write_master_xlsx 注入 ----
     assert period_a.cumulative_recognition_rate is not None
-    assert period_b.cumulative_recognition_rate is not None
-    # 第 2 期累计 = (a.main_within + b.main_within) / (a.judgable + b.judgable)
     expected_b_cum = (
         (period_a.main_within_10pct_count + period_b.main_within_10pct_count)
         / (period_a.judgable_trucks + period_b.judgable_trucks)
     )
     assert abs(period_b.cumulative_recognition_rate - expected_b_cum) < 1e-9
 
-    # ---- Sheet1 H 列：H4=标签, H5/H6 合并=数值 ----
-    wb = load_workbook(str(out))
-    ws = wb["统计周期概括"]
-    assert ws.cell(row=4, column=8).value == "累计准确率"
-    assert ws.cell(row=8, column=8).value == "累计符合率"
-    # 第 1 期：H5（合并左上角）= 累计识别率（即第 1 期识别率本身，因为只有它）
-    h5 = ws.cell(row=5, column=8).value
-    assert h5 is not None and h5 != ""
-    assert abs(float(h5) - period_a.cumulative_recognition_rate) < 1e-9
-    # 第 2 期：H19（=15+4）= 累计识别率
-    h19 = ws.cell(row=19, column=8).value
-    assert abs(float(h19) - period_b.cumulative_recognition_rate) < 1e-9
-    # 列宽 H 应为 14
-    assert ws.column_dimensions["H"].width == 14
-    print("master cumulative rates OK")
+    ws = load_workbook(str(out))["统计周期概括"]
+    values = {
+        ws.cell(row=rr, column=cc).value
+        for rr in range(1, 35)
+        for cc in range(1, 9)
+    }
+    assert "累计准确率" not in values
+    assert "累计符合率" not in values
+    print("master cumulative injected but not on sheet1 OK")
 
 
 def test_master_xlsx_cumulative_sheet():
@@ -1314,9 +1259,9 @@ def test_heavy_master_tool_generates_distinct_report():
 
     wb = load_workbook(result["xlsx_path"])
     ws = wb["统计周期概括"]
-    assert ws.cell(row=3, column=2).value == "重废归一化识别率"
-    assert ws.cell(row=5, column=4).value == "重废归一化准确率"
-    assert ws.cell(row=6, column=3).value == 1
+    assert ws.cell(row=4, column=2).value == "重废归一化识别率"
+    assert ws.cell(row=6, column=5).value == "重废归一化准确率"
+    assert ws.cell(row=7, column=3).value == 1
 
     # Sheet2 的主料型对比列也必须切换为归一化后的重废1/2/3视图：
     # A1 原始人工主料是“厚剪”，但重废归一化后应显示“重废1 60.00”
@@ -1336,25 +1281,22 @@ def test_heavy_master_tool_generates_distinct_report():
 
 
 def test_excel_summary_sheet1_first_period_no_prev():
-    """首期：未提供上周期 → F6/F10 留空，G5/G9 写 / """
+    """首期：Sheet1 只有目标值/完成情况，没有环比占位符。"""
     from openpyxl import load_workbook
 
     trucks = _build_sample_trucks()
     day1 = aggregate_daily("2026-04-22", trucks[:2])
     day2 = aggregate_daily("2026-04-23", trucks[2:])
     period = aggregate_period([day1, day2], "2026-04-22", "2026-04-23")
-    # 不设 prev_*
 
     out = Path("downloads/shenglong/_unit_test/report_first_period.xlsx")
     write_stats_xlsx([day1, day2], out, period_summary=period)
 
-    wb = load_workbook(str(out))
-    ws = wb["统计周期概括"]
-    # F6 留空，G5 = "/"
-    assert ws.cell(row=6, column=6).value in (None, "")
-    assert ws.cell(row=5, column=7).value == "/"
-    assert ws.cell(row=10, column=6).value in (None, "")
-    assert ws.cell(row=9, column=7).value == "/"
+    ws = load_workbook(str(out))["统计周期概括"]
+    assert ws.cell(row=5, column=6).value == "目标值"
+    assert ws.cell(row=5, column=7).value == "完成情况"
+    assert ws.cell(row=6, column=6).value == "第一阶段 ≥70%"
+    assert ws.cell(row=6, column=7).value != "/"
     print("sheet1 first period OK")
 
 
@@ -1367,7 +1309,7 @@ def test_calc_boundary_conditions():
     from agent.shenglong.calculator import calc_truck
     cfg = settings.shenglong
 
-    # 边界 1：占比差异恰好 10% (80% vs 70%) → 应当判定为 True (≤ 10%)
+    # 边界 1：占比差异恰好 10% (80% vs 70%) → 小于 11%，应当判定为 True
     detail_diff_10 = {
         "manualCheckResultVO": {
             "avgResult": [{"steelType": 1, "steelRate": 0.80}, {"steelType": 11, "steelRate": 0.20}],
@@ -1430,7 +1372,7 @@ def test_aggregate_empty_or_zero_division():
     t_zero = calc_truck("2026-05-01", "鲁Z-0000", 1, "f-zero", detail_zero, settings.shenglong)
     assert t_zero.manual_deduct_ton == 0.0
     assert t_zero.ai_deduct_ton == 0.0
-    assert t_zero.deduction_compliant is True, "双方均为0时应判定为符合或通过绝对值条件判定"
+    assert t_zero.deduction_compliant is None, "AI 扣重为 0 时该车不参与扣杂统计"
     
     print("zero division and empty list OK")
 
@@ -1493,6 +1435,105 @@ def test_operator_has_only_invalid_materials():
     print("operator only invalid materials OK")
 
 
+def _one_operator_detail(manual_items, ai_items, deduct_ton=0.12, ai_kg=140.0):
+    return {
+        "manualCheckResultVO": {
+            "checkDetails": [
+                {
+                    "operatorName": "张三",
+                    "deduction": deduct_ton,
+                    "steelPrice": 2800,
+                    "details": [
+                        {"steelType": st, "steelRate": rate}
+                        for st, rate in manual_items
+                    ],
+                }
+            ],
+        },
+        "totalCheckResult": {
+            "steelTypeRateList": [
+                {"steelType": st, "steelRate": rate} for st, rate in ai_items
+            ],
+            "totalDeductWeight": ai_kg,
+        },
+    }
+
+
+def test_main_diff_under_11_percent_is_correct():
+    """10.xx% 差异算正确；刚好 11% 不算正确。"""
+    t_ok = calc_truck(
+        "2026-08-20", "鲁A-1010", 1, "f-1010",
+        _one_operator_detail([(1, 0.80), (11, 0.20)], [(1, 0.695), (11, 0.305)]),
+        settings.shenglong,
+    )
+    assert abs(t_ok.diff_rate - 10.5) < 1e-6
+    assert t_ok.main_same is True
+
+    t_edge = calc_truck(
+        "2026-08-20", "鲁A-1011", 1, "f-1011",
+        _one_operator_detail([(1, 0.80), (11, 0.20)], [(1, 0.69), (11, 0.31)]),
+        settings.shenglong,
+    )
+    assert abs(t_edge.diff_rate - 11.0) < 1e-6
+    assert t_edge.main_same is False
+    print("main diff <11% OK")
+
+
+def test_tied_main_types_any_match_counts():
+    """人工重废1/重废2 并列 40%，AI 主料是重废2 且差异 <11% → 正确。"""
+    from agent.shenglong.dict import get_main_type_from_list
+
+    # 展示用仍按优先级取重废1；判定必须能命中重废2
+    display = get_main_type_from_list([(1, 40.0), (2, 40.0), (11, 20.0)])
+    assert display[0] == 1
+
+    t = calc_truck(
+        "2026-08-20", "鲁A-2020", 1, "f-2020",
+        _one_operator_detail(
+            [(1, 0.40), (2, 0.40), (11, 0.20)],
+            [(2, 0.42), (1, 0.30), (11, 0.28)],
+        ),
+        settings.shenglong,
+    )
+    assert t.manual_main.steel_type == 1
+    assert t.ai_main.steel_type == 2
+    assert t.main_name_match is True
+    assert abs(t.diff_rate - 2.0) < 1e-6
+    assert t.main_same is True
+    print("tied main match OK")
+
+
+def test_deduction_error_under_151kg_is_correct():
+    """误差 150.99kg 正确；刚好 151kg 且比值也不在 0.5~1.5 则不正确。"""
+    # 人工 0.10t，AI 0.25099t → 误差 0.15099t，比值 2.5099 不在区间
+    t_ok = calc_truck(
+        "2026-08-20", "鲁A-3030", 1, "f-3030",
+        _one_operator_detail([(1, 1.0)], [(1, 1.0)], deduct_ton=0.10, ai_kg=250.99),
+        settings.shenglong,
+    )
+    assert abs(t_ok.weight_diff_ton - 0.15099) < 1e-9
+    assert t_ok.deduction_compliant is True
+
+    t_fail = calc_truck(
+        "2026-08-20", "鲁A-3031", 1, "f-3031",
+        _one_operator_detail([(1, 1.0)], [(1, 1.0)], deduct_ton=0.10, ai_kg=251.0),
+        settings.shenglong,
+    )
+    assert abs(t_fail.weight_diff_ton - 0.151) < 1e-9
+    assert t_fail.deduction_compliant is False
+    print("deduction <151kg OK")
+
+
+def test_last_complete_7_days_excludes_today():
+    from datetime import date
+    from agent.shenglong.calculator import last_complete_7_days
+
+    start, end = last_complete_7_days(date(2026, 8, 27))
+    assert start == "2026-08-20"
+    assert end == "2026-08-26"
+    print("last 7 days OK")
+
+
 if __name__ == "__main__":
     test_dict()
     test_shenglong_record_station_number_list()
@@ -1508,13 +1549,13 @@ if __name__ == "__main__":
     test_excluded_operators_filtered()
     test_all_operators_excluded_means_manual_missing()
     test_one_side_missing_not_counted()
-    test_excel_summary_sheet1_with_prev_period()
+    test_excel_summary_sheet1_has_no_wow_columns()
     test_excel_summary_sheet1_first_period_no_prev()
     test_master_xlsx_two_cycles_with_auto_prev_chain()
     test_master_xlsx_user_provided_prev_not_overridden()
     test_master_xlsx_empty_raises()
-    test_master_prev_deduction_matches_visible_sheet_formula()
-    test_master_xlsx_cumulative_rates_in_sheet1()
+    test_master_summary_deduction_uses_evaluable_denominator()
+    test_master_xlsx_cumulative_rates_still_injected()
     test_master_xlsx_cumulative_sheet()
     test_master_export_ranges_group_chain()
     test_master_export_legacy_merge_with_next_ignored()
@@ -1528,5 +1569,9 @@ if __name__ == "__main__":
     test_aggregate_empty_or_zero_division()
     test_main_material_tie_breaker()
     test_operator_has_only_invalid_materials()
+    test_main_diff_under_11_percent_is_correct()
+    test_tied_main_types_any_match_counts()
+    test_deduction_error_under_151kg_is_correct()
+    test_last_complete_7_days_excludes_today()
     
     print("\nAll shenglong unit smoke tests PASSED")

@@ -1,12 +1,13 @@
 """盛隆废钢检判业务计算
 
 关键规则（已和用户确认）：
-  · 主料型正确：**料型名字一致 AND 差异值 ≤ 10%**（差异值任一侧超 10% 算不正确）
-  · 差异值(%)：主料名字一致时 = abs(人工主料占比 - AI 对应料型占比)；否则 /
+  · 主料型正确：**料型名字一致 AND 差异值 < 11%**（10.xx 算正确，达到 11% 才算不正确）
+  · 并列最高占比的多种主料型：AI 与人工只要有一种主料型相同，且该料型占比差异 < 11%，即算正确
+  · 差异值(%)：命中同一主料型时 = abs(人工该料型占比 - AI 该料型占比)；否则 /
   · 扣重比值：AI/人工（AI、人工单位已统一到吨）
   · 扣重误差：|AI-人工|（取绝对值）
   · 单价差异：|AI-人工|（AI 目前无输出 → None）
-  · 扣杂准确：0.5≤比值≤1.5 OR |误差|≤0.15 吨
+  · 扣杂准确：0.5≤比值≤1.5 OR |误差| < 0.151 吨（未到 151kg 都算正确）
   · 识别率 R：主料正确 / 可判定车数（双方主料非空） → 目标 ≥92%
   · 扣杂符合率：扣杂准确 / 可评估扣杂车数 → 目标 ≥90%
 
@@ -31,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import replace
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -39,8 +41,8 @@ from agent.shenglong.dict import (
     HEAVY_STEEL_TYPES,
     REFERENCE_TYPES,
     STEEL_TYPE_PRICE,
-    filter_main_candidates,
     get_main_type_from_list,
+    get_tied_main_types,
     is_excluded_operator,
 )
 from agent.shenglong.models import (
@@ -58,8 +60,8 @@ logger = logging.getLogger(__name__)
 
 EXCLUSION_LOG_PATH = Path(__file__).resolve().parents[2] / "deduction_exclusion_log.json"
 
-# 主料型正确的差异值容忍度（%）：料型一致且 |人工占比-AI占比| ≤ 该值 才算主料正确
-MAIN_TYPE_DIFF_TOLERANCE: float = 10.0
+# 主料型正确的差异值上限（%）：料型一致且 |人工占比-AI占比| < 该值 才算主料正确
+MAIN_TYPE_DIFF_TOLERANCE: float = 11.0
 
 
 def _parse_rate_list(raw_list) -> List[MaterialRate]:
@@ -203,12 +205,40 @@ def _aggregate_manual_from_operators(
     return materials, main_entry, deduct, manual_price, final_price
 
 
+def _judge_main_type(
+    manual_items: List[Tuple[Optional[int], float]],
+    ai_items: List[Tuple[Optional[int], float]],
+) -> Tuple[Optional[bool], Optional[bool], Optional[float]]:
+    """判定主料型名字是否命中、是否综合正确、差异值。
+
+    并列最高占比的多种主料型：只要双方有一种相同，就按该料型比差异。
+    多种都相同时取差异最小的一对。
+    """
+    manual_tied = get_tied_main_types(manual_items)
+    ai_tied = get_tied_main_types(ai_items)
+    if not manual_tied or not ai_tied:
+        return None, None, None
+
+    best_diff: Optional[float] = None
+    for m_type, m_rate in manual_tied:
+        for a_type, a_rate in ai_tied:
+            if m_type != a_type:
+                continue
+            diff = abs(m_rate - a_rate)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+
+    if best_diff is None:
+        return False, False, None
+    return True, best_diff < MAIN_TYPE_DIFF_TOLERANCE, best_diff
+
+
 def _judge_deduction_compliance(
     weight_ratio: Optional[float],
     weight_diff_ton: Optional[float],
     cfg: ShenglongConfig,
 ) -> Optional[bool]:
-    """扣杂准确判定：0.5≤ratio≤1.5 OR |误差|≤0.15t"""
+    """扣杂准确判定：0.5≤ratio≤1.5 OR |误差| < 0.151t（未到 151kg）。"""
     if weight_ratio is None and weight_diff_ton is None:
         return None
     ratio_ok = (
@@ -217,7 +247,7 @@ def _judge_deduction_compliance(
     )
     err_ok = (
         weight_diff_ton is not None
-        and abs(weight_diff_ton) <= cfg.deduction_error_tolerance_ton
+        and abs(weight_diff_ton) < cfg.deduction_error_tolerance_ton
     )
     return ratio_ok or err_ok
 
@@ -292,15 +322,13 @@ def calc_truck(
         stat.main_same = None
         stat.diff_rate = None
     else:
-        name_match = stat.manual_main.steel_type == stat.ai_main.steel_type
+        name_match, main_same, diff_rate = _judge_main_type(
+            [(m.steel_type, m.rate) for m in stat.manual_materials],
+            [(m.steel_type, m.rate) for m in stat.ai_materials],
+        )
         stat.main_name_match = name_match
-        if name_match:
-            ai_rate = stat.ai_main.rate
-            stat.diff_rate = abs(stat.manual_main.rate - ai_rate)
-            stat.main_same = stat.diff_rate <= MAIN_TYPE_DIFF_TOLERANCE
-        else:
-            stat.diff_rate = None  
-            stat.main_same = False
+        stat.main_same = main_same
+        stat.diff_rate = diff_rate
 
     # -------- 派生：扣重比值 / 误差 --------
     # AI totalDeductWeight = 0 时，视为该车不参与扣杂车辆统计
@@ -428,28 +456,21 @@ def _main_from_normalized_rates(
 ) -> Optional[Tuple[int, float]]:
     if not rates:
         return None
-    return max(rates.items(), key=lambda item: item[1])
+    return max(rates.items(), key=lambda item: (item[1], -item[0]))
 
 
 def _judge_heavy_normalized_truck(
     truck: TruckStat,
-) -> Tuple[Optional[bool], Optional[bool]]:
-    """返回 (重废主类是否相同, 重废归一化准确是否正确)"""
+) -> Tuple[Optional[bool], Optional[bool], Optional[float]]:
+    """返回 (重废主类是否相同, 重废归一化准确是否正确, 差异值)。"""
     manual_rates = _normalized_target_rates(
         truck.manual_materials, HEAVY_STEEL_TYPES
     )
     ai_rates = _normalized_target_rates(truck.ai_materials, HEAVY_STEEL_TYPES)
-    manual_main = _main_from_normalized_rates(manual_rates)
-    ai_main = _main_from_normalized_rates(ai_rates)
-    if manual_main is None or ai_main is None:
-        return None, None
-
-    name_match = manual_main[0] == ai_main[0]
-    if not name_match:
-        return False, False
-
-    diff = abs(manual_main[1] - ai_main[1])
-    return True, diff <= MAIN_TYPE_DIFF_TOLERANCE
+    return _judge_main_type(
+        list(manual_rates.items()),
+        list(ai_rates.items()),
+    )
 
 
 def _heavy_normalized_main_material(
@@ -485,15 +506,7 @@ def to_heavy_normalized_view(
                 )
                 continue
 
-            name_match = manual_main.steel_type == ai_main.steel_type
-            if name_match:
-                diff_rate: Optional[float] = abs(manual_main.rate - ai_main.rate)
-                main_same: Optional[bool] = (
-                    diff_rate <= MAIN_TYPE_DIFF_TOLERANCE
-                )
-            else:
-                diff_rate = None
-                main_same = False
+            name_match, main_same, diff_rate = _judge_heavy_normalized_truck(t)
 
             trucks.append(
                 replace(
@@ -524,7 +537,7 @@ def aggregate_period_heavy_normalized(
         recognition_section_title="重废归一化识别率",
         recognition_condition1_label="排除人工无重废后\n主重废类相同车次数",
         recognition_condition2_label=(
-            "重废1/2/3归一化后\n主料型占比差异≤10% 车次数"
+            "重废1/2/3归一化后\n主料型占比差异小于11% 车次数"
         ),
         recognition_result_label="重废归一化准确率",
         cumulative_recognition_label="累计准确率",
@@ -532,7 +545,7 @@ def aggregate_period_heavy_normalized(
 
     for day in stats_list:
         for t in day.trucks:
-            name_match, correct = _judge_heavy_normalized_truck(t)
+            name_match, correct, _ = _judge_heavy_normalized_truck(t)
             if correct is not None:
                 summary.judgable_trucks += 1
             if name_match is True:
@@ -558,6 +571,17 @@ def aggregate_period_heavy_normalized(
                     summary.price_diff_gt100 += 1
 
     return summary
+
+
+def last_complete_7_days(today: Optional[date] = None) -> Tuple[str, str]:
+    """盛隆「近7天」：昨天往前共 7 个自然日（含昨天、不含今天）。
+
+    今天 08-27 → 08-20 至 08-26。
+    """
+    day = today or date.today()
+    end = day - timedelta(days=1)
+    start = day - timedelta(days=7)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
 def _format_cycle_label(start_date: str, end_date: str) -> str:

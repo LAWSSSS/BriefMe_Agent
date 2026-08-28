@@ -282,7 +282,7 @@ TOOLS = [
             "description": (
                 "【盛隆废钢检判项目】导出指定日期/日期范围的盛隆废钢检判统计 xlsx 报表。"
                 "报表含三个 sheet：Sheet1「统计周期概括」(识别准确率 / 扣重符合率 / "
-                "价格差异分布 / 上周期对比环比)，Sheet2「累计统计」(截图式总览 + Tol 合计)，"
+                "价格差异分布，无环比)，Sheet2「累计统计」(截图式总览 + Tol 合计)，"
                 "Sheet3「检判统计详情」(37 列单车明细)。"
                 "如果用户给出『上周期』『上次』『环比』『对比上周期』等线索，"
                 "把上周期日期范围分别填到 prev_start_date / prev_end_date，"
@@ -495,31 +495,69 @@ TOOLS = [
             },
         },
     },
-        # 盛隆图像下载工具
+        # 盛隆图像下载工具（只走 3000 业务系统，不走 MinIO）
     {
         "type": "function",
         "function": {
             "name": "download_shenglong_images",
-            "description": "从盛隆工厂的MinIO服务器批量下载指定日期范围内的监控图像。用于获取废钢检判的现场监控图片。下载前请确保VPN已连接。",
+            "description": (
+                "【盛隆检判原图下载】从盛隆废钢智能质检系统（172.16.16.101:3000）"
+                "下载指定日期、多个不连续日期、或连续日期区间的「智能判级照片」原图。"
+                "用户用顿号/逗号列出的多个日期必须放进 dates，不要当成连续区间补中间天。"
+                "用户说 A 到 B 时用 start_date/end_date。"
+                "必须使用用户给出的本地保存路径；没有路径时 output_dir 传空字符串。"
+                "不要走 MinIO。下载前请确保盛隆 VPN 已连接。"
+                "每个日期的车次文件夹下完后会原样 scp 到推理测试机；scp 失败只记总结，不中断下载。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "start_date": {
                         "type": "string",
-                        "description": "起始日期，格式 YYYY-MM-DD，例如 2026-05-01"
+                        "description": "起始日期 YYYY-MM-DD；单日或连续区间时填写"
                     },
                     "end_date": {
                         "type": "string",
-                        "description": "结束日期，格式 YYYY-MM-DD，例如 2026-05-07"
+                        "description": "结束日期 YYYY-MM-DD；单日时与 start_date 相同"
+                    },
+                    "dates": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "不连续的多个日期，如 [\"2026-08-01\",\"2026-08-03\"]。有此字段时按列表下载，不补中间天"
                     },
                     "output_dir": {
                         "type": "string",
-                        "description": "可选，保存图像的目录路径，默认是 ./shenglong_images/"
+                        "description": "本机保存目录的绝对路径。必须从用户消息或页面「保存路径」提取，例如 /Users/xxx/Desktop/盛隆图像"
                     }
                 },
                 "required": ["start_date", "end_date"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pack_shenglong_multilabel",
+            "description": (
+                "【盛隆废钢多标签分类数据集打包】仅在用户人工筛完不合格图、并明确确认打包后调用。"
+                "扫描保存目录里各日期/各车次还剩下的原图，生成「废钢多标签分类数据集.zip」。"
+                "不要在下载刚结束时自动调用。没有保存路径时 output_dir 传空字符串。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_dir": {
+                        "type": "string",
+                        "description": "本机保存目录，须与下载时同一路径",
+                    },
+                    "dates": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选。只打包这些日期；不填则打包目录下全部日期文件夹",
+                    },
+                },
+            },
+        },
     },
     # =========================================================
     # 镔鑫球机图像下载+重命名（bxsteel_ 前缀）

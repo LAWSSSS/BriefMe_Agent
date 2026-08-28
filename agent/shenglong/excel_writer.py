@@ -16,8 +16,7 @@
 
 两种入口：
   · ``write_stats_xlsx``      单周期（统计周期概括 + 累计统计 + 详情）
-  · ``write_master_xlsx``     多周期主表（Sheet1 多个 14 行块 + 累计统计 + 详情多段，
-                              环比自动链：第 i 周期 prev = 第 i-1 周期实际值）
+  · ``write_master_xlsx``     多周期主表（Sheet1 多个 17 行块 + 累计统计 + 详情多段）
 """
 from __future__ import annotations
 
@@ -520,15 +519,14 @@ def write_master_xlsx(
 ) -> Path:
     """生成多周期主表：
 
-    Sheet1「统计周期概括」会把每个周期的 14 行块依次往下排（A 列 1/2/3...）。
+    Sheet1「统计周期概括」会把每个周期的 17 行块依次往下排（A 列 1/2/3...）。
     Sheet2「累计统计」汇总各期和 Tol 合计。
     Sheet3「检判统计详情」每个周期一段（深蓝段标题 + 三级表头 + 数据 + 期间汇总）。
 
     Args:
         cycles: 周期列表 [(stats_list, period_summary), ...]，**按时间升序**
         save_path: 输出路径
-        auto_link_prev: 自动建立环比链——第 i 周期的 prev_* 设为第 i-1 周期的
-            实际识别率 / 扣重符合率（用户已经手设的非 None 值会优先保留）
+        auto_link_prev: 仍计算累计字段供「累计统计」页使用；Sheet1 不再写环比
 
     Returns:
         save_path
@@ -614,9 +612,9 @@ def write_master_xlsx(
 
 
 # =====================================================================
-#  Sheet1 「统计周期概括」 —— 14 行/周期模板（参照参考表）
+#  Sheet1 「统计周期概括」 —— 17 行/周期模板（无环比）
 # =====================================================================
-PERIOD_BLOCK_ROWS = 14
+PERIOD_BLOCK_ROWS = 17
 SUMMARY_TITLE_FILL = PatternFill("solid", fgColor="BDD7EE")  # 段落标题（识别率/扣重符合率/价格差异）
 SUMMARY_HEADER_FILL = PatternFill("solid", fgColor="DDEBF7")  # 表头（条件/结果/目标值）
 SUMMARY_RESULT_FILL = PatternFill("solid", fgColor="FFF2CC")  # 关键结果格底色
@@ -652,260 +650,198 @@ def _merge_with_style(ws, start_row, start_col, end_row, end_col) -> None:
     )
 
 
+def _paint_range(ws, r1: int, c1: int, r2: int, c2: int, fill=None) -> None:
+    """给合并区内每个格子补边框/底色（openpyxl 合并后只保留左上角样式）。"""
+    for rr in range(r1, r2 + 1):
+        for cc in range(c1, c2 + 1):
+            ws.cell(row=rr, column=cc).border = BORDER
+            if fill is not None:
+                ws.cell(row=rr, column=cc).fill = fill
+
+
+def _stage_status(rate_pct: Optional[float], threshold: float) -> str:
+    if rate_pct is None:
+        return ""
+    return "已达标" if rate_pct + 1e-9 >= threshold else ""
+
+
 def _write_one_period_block(
     ws, base_row: int, cycle_idx: int, p: PeriodSummary
 ) -> None:
-    """写一个周期的 14 行块，base_row 是该块第一行的 1-based 行号
-
-    F/G 列（"指标变化（环比）"）只有在 ``p.prev_recognition_rate`` /
-    ``p.prev_deduction_compliance_rate`` 为非 None 时才填实际值；
-    否则 F6/F10 留空、G 列环比也写"/"，避免误导。
-    """
+    """写一个周期的 17 行块（B-G，无环比）。base_row 是该块第一行。"""
     r = base_row
+    rec_rate = p.recognition_rate_pct
+    dd_rate = p.deduction_compliance_rate_pct
 
-    # ---- A 列序号（合并 14 行）----
     _set_summary_cell(ws, r, 1, cycle_idx, bold=True, fill=SUMMARY_HEADER_FILL)
     _merge_with_style(ws, r, 1, r + PERIOD_BLOCK_ROWS - 1, 1)
-    # 合并后给所有行的 A 列都加边框（openpyxl 合并单元格只保留左上角样式，内部要手动补）
-    for rr in range(r + 1, r + PERIOD_BLOCK_ROWS):
-        ws.cell(row=rr, column=1).border = BORDER
+    _paint_range(ws, r, 1, r + PERIOD_BLOCK_ROWS - 1, 1, SUMMARY_HEADER_FILL)
 
-    # ---- F/G/H 列：指标变化大标题（合并 F1:H3 区域，纵跨第 1~3 行）----
-    _set_summary_cell(ws, r, 6, "指标变化", bold=True, fill=SUMMARY_TITLE_FILL)
-    _merge_with_style(ws, r, 6, r + 2, 8)
-    # 合并区内部其他单元格也补边框/底色
-    for rr in range(r, r + 3):
-        for cc in (6, 7, 8):
-            ws.cell(row=rr, column=cc).border = BORDER
-            if rr == r and cc == 6:
-                continue
-            ws.cell(row=rr, column=cc).fill = SUMMARY_TITLE_FILL
-
-    # ---- 行 1：统计周期 ----
+    # 行 1：统计周期
     _set_summary_cell(ws, r, 2, "统计周期", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r, 3, p.cycle_label, bold=True)
-    _merge_with_style(ws, r, 3, r, 5)
-    for cc in (4, 5):
-        ws.cell(row=r, column=cc).border = BORDER
+    _merge_with_style(ws, r, 2, r, 4)
+    _paint_range(ws, r, 2, r, 4, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r, 5, p.cycle_label, bold=True)
+    _merge_with_style(ws, r, 5, r, 7)
+    _paint_range(ws, r, 5, r, 7)
 
-    # ---- 行 2：周期内有效检判车次数 ----
+    # 行 2：有效检判车次
     _set_summary_cell(ws, r + 1, 2, "周期内有效检判车次数", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 1, 3, p.judgable_trucks, bold=True)
-    _merge_with_style(ws, r + 1, 3, r + 1, 5)
-    for cc in (4, 5):
-        ws.cell(row=r + 1, column=cc).border = BORDER
+    _merge_with_style(ws, r + 1, 2, r + 1, 4)
+    _paint_range(ws, r + 1, 2, r + 1, 4, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 1, 5, p.judgable_trucks, bold=True)
+    _merge_with_style(ws, r + 1, 5, r + 1, 7)
+    _paint_range(ws, r + 1, 5, r + 1, 7)
 
-    # ---- 行 3：识别率 段落标题 ----
-    _set_summary_cell(
-        ws, r + 2, 2, p.recognition_section_title,
-        bold=True, fill=SUMMARY_TITLE_FILL,
-    )
-    _merge_with_style(ws, r + 2, 2, r + 2, 5)
-    for cc in (3, 4, 5):
-        ws.cell(row=r + 2, column=cc).border = BORDER
-        ws.cell(row=r + 2, column=cc).fill = SUMMARY_TITLE_FILL
+    # 行 3：有效扣重车次
+    _set_summary_cell(ws, r + 2, 2, "周期内有效扣重车次数", bold=True, fill=SUMMARY_HEADER_FILL)
+    _merge_with_style(ws, r + 2, 2, r + 2, 4)
+    _paint_range(ws, r + 2, 2, r + 2, 4, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 2, 5, p.deduction_evaluable, bold=True)
+    _merge_with_style(ws, r + 2, 5, r + 2, 7)
+    _paint_range(ws, r + 2, 5, r + 2, 7)
 
-    # ---- 行 4：识别率 表头（含 F/G/H 上周期/环比/累计小表头）----
-    _set_summary_cell(ws, r + 3, 2, "条件1", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 3, 3, "条件2", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 3, 4, "结果", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 3, 5, "目标值", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 3, 6, "上周期结果", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 3, 7, "环比", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(
-        ws, r + 3, 8, p.cumulative_recognition_label,
-        bold=True, fill=SUMMARY_HEADER_FILL,
-    )
+    # 行 4：识别率标题
+    _set_summary_cell(ws, r + 3, 2, p.recognition_section_title, bold=True, fill=SUMMARY_TITLE_FILL)
+    _merge_with_style(ws, r + 3, 2, r + 3, 7)
+    _paint_range(ws, r + 3, 2, r + 3, 7, SUMMARY_TITLE_FILL)
 
-    # ---- 行 5：识别率 子表头（含 F5 "识别准确率"）----
-    _set_summary_cell(
-        ws, r + 4, 2, p.recognition_condition1_label,
-        fill=SUMMARY_HEADER_FILL,
-    )
-    _set_summary_cell(
-        ws, r + 4, 3, p.recognition_condition2_label,
-        fill=SUMMARY_HEADER_FILL,
-    )
-    _set_summary_cell(
-        ws, r + 4, 4, p.recognition_result_label,
-        fill=SUMMARY_HEADER_FILL,
-    )
-    _set_summary_cell(
-        ws,
-        r + 4,
-        5,
-        "第一阶段 ≥70%\n第二阶段 ≥80%\n第三阶段 ≥92%",
-        fill=SUMMARY_HEADER_FILL,
-    )
-    _merge_with_style(ws, r + 4, 5, r + 5, 5)
-    ws.cell(row=r + 5, column=5).border = BORDER
-    # F5 = 识别率标签
-    _set_summary_cell(
-        ws, r + 4, 6, p.recognition_result_label,
-        fill=SUMMARY_HEADER_FILL,
-    )
-    # G5:G6 合并 = 环比公式（写在 G5/G6 中的左上角，整段合并跨 r+4 ~ r+5）
-    # H5:H6 合并 = 累计准确率值（小数 0~1）
-    if p.cumulative_recognition_rate is not None:
-        _set_summary_cell(
-            ws, r + 4, 8, float(p.cumulative_recognition_rate), bold=True,
-            fill=SUMMARY_RESULT_FILL, number_format="0.00%",
-        )
-    else:
-        _set_summary_cell(ws, r + 4, 8, "", fill=SUMMARY_HEADER_FILL)
-    _merge_with_style(ws, r + 4, 8, r + 5, 8)
-    ws.cell(row=r + 5, column=8).border = BORDER
-    if p.cumulative_recognition_rate is None:
-        ws.cell(row=r + 5, column=8).fill = SUMMARY_HEADER_FILL
+    # 行 5：识别率表头
+    _set_summary_cell(ws, r + 4, 2, "条件1", bold=True, fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 4, 3, "条件2", bold=True, fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 4, 4, "结果", bold=True, fill=SUMMARY_HEADER_FILL)
+    _merge_with_style(ws, r + 4, 4, r + 4, 5)
+    _paint_range(ws, r + 4, 4, r + 4, 5, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 4, 6, "目标值", bold=True, fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 4, 7, "完成情况", bold=True, fill=SUMMARY_HEADER_FILL)
 
-    # ---- 行 6：识别率 数值 + F6 上周期数值 + G5:G6 环比 ----
-    _set_summary_cell(ws, r + 5, 2, p.main_name_match_count, bold=True)
-    _set_summary_cell(ws, r + 5, 3, p.main_within_10pct_count, bold=True)
-    formula = f"=IFERROR(C{r + 5}/C{r + 1},0)"
+    # 行 6：识别率子表头
+    _set_summary_cell(ws, r + 5, 2, p.recognition_condition1_label, fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 5, 3, p.recognition_condition2_label, fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 5, 4, "主料型识别率", fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 5, 5, p.recognition_result_label, fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 5, 6, "第一阶段 ≥70%", fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 5, 7, _stage_status(rec_rate, 70.0), fill=SUMMARY_HEADER_FILL)
+
+    # 行 7-8：识别率数值（纵向合并）+ 二三阶段
+    _set_summary_cell(ws, r + 6, 2, p.main_name_match_count, bold=True)
+    _merge_with_style(ws, r + 6, 2, r + 7, 2)
+    _paint_range(ws, r + 6, 2, r + 7, 2)
+    _set_summary_cell(ws, r + 6, 3, p.main_within_10pct_count, bold=True)
+    _merge_with_style(ws, r + 6, 3, r + 7, 3)
+    _paint_range(ws, r + 6, 3, r + 7, 3)
+    name_rate_f = f"=IFERROR(B{r + 6}/E{r + 1},0)"
     _set_summary_cell(
-        ws, r + 5, 4, formula, bold=True, fill=SUMMARY_RESULT_FILL,
-        number_format="0.00%",
+        ws, r + 6, 4, name_rate_f, bold=True,
+        fill=SUMMARY_RESULT_FILL, number_format="0.00%",
     )
-    # F6 上周期识别率（小数 0~1）
-    if p.prev_recognition_rate is not None:
-        _set_summary_cell(
-            ws, r + 5, 6, float(p.prev_recognition_rate), bold=True,
-            fill=SUMMARY_RESULT_FILL, number_format="0.00%",
-        )
-        # G5:G6 合并 + 环比公式 =(D6-F6)/F6
-        ratio_formula = f"=IFERROR((D{r + 5}-F{r + 5})/F{r + 5},0)"
-        _set_summary_cell(
-            ws, r + 4, 7, ratio_formula, bold=True,
-            fill=SUMMARY_RESULT_FILL, number_format="0.00%",
-        )
-        _merge_with_style(ws, r + 4, 7, r + 5, 7)
-        ws.cell(row=r + 5, column=7).border = BORDER
-    else:
-        # 首期：F6 留空、G 写 "/"，且 G5:G6 合并
-        _set_summary_cell(ws, r + 5, 6, "", fill=SUMMARY_HEADER_FILL)
-        _set_summary_cell(ws, r + 4, 7, "/", bold=True, fill=SUMMARY_HEADER_FILL)
-        _merge_with_style(ws, r + 4, 7, r + 5, 7)
-        ws.cell(row=r + 5, column=7).border = BORDER
-
-    # ---- 行 7：扣重符合率 段落标题 ----
-    _set_summary_cell(ws, r + 6, 2, "扣重符合率", bold=True, fill=SUMMARY_TITLE_FILL)
-    _merge_with_style(ws, r + 6, 2, r + 6, 5)
-    for cc in (3, 4, 5):
-        ws.cell(row=r + 6, column=cc).border = BORDER
-        ws.cell(row=r + 6, column=cc).fill = SUMMARY_TITLE_FILL
-
-    # ---- 行 8：扣重 表头（含 F/G/H 上周期/环比/累计小表头）----
-    _set_summary_cell(ws, r + 7, 2, "条件", bold=True, fill=SUMMARY_HEADER_FILL)
-    _merge_with_style(ws, r + 7, 2, r + 7, 3)
-    ws.cell(row=r + 7, column=3).border = BORDER
-    ws.cell(row=r + 7, column=3).fill = SUMMARY_HEADER_FILL
-    _set_summary_cell(ws, r + 7, 4, "结果", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 7, 5, "目标值", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 7, 6, "上周期结果", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 7, 7, "环比", bold=True, fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 7, 8, "累计符合率", bold=True, fill=SUMMARY_HEADER_FILL)
-
-    # ---- 行 9：扣重 子表头（含 F9 "扣重符合准确率"）----
+    _merge_with_style(ws, r + 6, 4, r + 7, 4)
+    _paint_range(ws, r + 6, 4, r + 7, 4, SUMMARY_RESULT_FILL)
+    rec_rate_f = f"=IFERROR(C{r + 6}/E{r + 1},0)"
     _set_summary_cell(
-        ws,
-        r + 8,
-        2,
-        "比值在 0.5~1.5 之间或\n误差绝对值在 150Kg 以内 车次数",
-        fill=SUMMARY_HEADER_FILL,
+        ws, r + 6, 5, rec_rate_f, bold=True,
+        fill=SUMMARY_RESULT_FILL, number_format="0.00%",
     )
-    _merge_with_style(ws, r + 8, 2, r + 8, 3)
-    ws.cell(row=r + 8, column=3).border = BORDER
-    ws.cell(row=r + 8, column=3).fill = SUMMARY_HEADER_FILL
-    _set_summary_cell(ws, r + 8, 4, "扣重符合准确率", fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(
-        ws,
-        r + 8,
-        5,
-        "第一阶段 ≥70%\n第二阶段 ≥80%\n第三阶段 ≥90%",
-        fill=SUMMARY_HEADER_FILL,
-    )
-    _merge_with_style(ws, r + 8, 5, r + 9, 5)
-    ws.cell(row=r + 9, column=5).border = BORDER
-    _set_summary_cell(ws, r + 8, 6, "扣重符合准确率", fill=SUMMARY_HEADER_FILL)
-    # G9:G10 留给环比公式（合并）
-    # H9:H10 合并 = 累计符合率值
-    if p.cumulative_deduction_compliance_rate is not None:
-        _set_summary_cell(
-            ws, r + 8, 8, float(p.cumulative_deduction_compliance_rate), bold=True,
-            fill=SUMMARY_RESULT_FILL, number_format="0.00%",
-        )
-    else:
-        _set_summary_cell(ws, r + 8, 8, "", fill=SUMMARY_HEADER_FILL)
-    _merge_with_style(ws, r + 8, 8, r + 9, 8)
-    ws.cell(row=r + 9, column=8).border = BORDER
-    if p.cumulative_deduction_compliance_rate is None:
-        ws.cell(row=r + 9, column=8).fill = SUMMARY_HEADER_FILL
+    _merge_with_style(ws, r + 6, 5, r + 7, 5)
+    _paint_range(ws, r + 6, 5, r + 7, 5, SUMMARY_RESULT_FILL)
+    _set_summary_cell(ws, r + 6, 6, "第二阶段 ≥80%")
+    _set_summary_cell(ws, r + 6, 7, _stage_status(rec_rate, 80.0))
+    _set_summary_cell(ws, r + 7, 6, "第三阶段 ≥92%")
+    _set_summary_cell(ws, r + 7, 7, _stage_status(rec_rate, 92.0))
 
-    # ---- 行 10：扣重 数值 + F10 上周期数值 + G9:G10 环比 ----
-    _set_summary_cell(ws, r + 9, 2, p.deduction_compliant_count, bold=True)
+    # 行 9：扣重符合率标题
+    _set_summary_cell(ws, r + 8, 2, "扣重符合率", bold=True, fill=SUMMARY_TITLE_FILL)
+    _merge_with_style(ws, r + 8, 2, r + 8, 7)
+    _paint_range(ws, r + 8, 2, r + 8, 7, SUMMARY_TITLE_FILL)
+
+    # 行 10：扣重表头
+    _set_summary_cell(ws, r + 9, 2, "条件", bold=True, fill=SUMMARY_HEADER_FILL)
     _merge_with_style(ws, r + 9, 2, r + 9, 3)
-    ws.cell(row=r + 9, column=3).border = BORDER
-    formula = f"=IFERROR(B{r + 9}/C{r + 1},0)"
+    _paint_range(ws, r + 9, 2, r + 9, 3, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 9, 4, "结果", bold=True, fill=SUMMARY_HEADER_FILL)
+    _merge_with_style(ws, r + 9, 4, r + 9, 5)
+    _paint_range(ws, r + 9, 4, r + 9, 5, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 9, 6, "目标值", bold=True, fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 9, 7, "完成情况", bold=True, fill=SUMMARY_HEADER_FILL)
+
+    # 行 11：扣重子表头
     _set_summary_cell(
-        ws, r + 9, 4, formula, bold=True, fill=SUMMARY_RESULT_FILL,
-        number_format="0.00%",
+        ws, r + 10, 2,
+        "比值在 0.5~1.5 之间或\n误差绝对值在 151Kg 以内 车次数",
+        fill=SUMMARY_HEADER_FILL,
     )
-    ws.cell(row=r + 9, column=5).border = BORDER
-    # F10 上周期扣重符合率
-    if p.prev_deduction_compliance_rate is not None:
-        _set_summary_cell(
-            ws, r + 9, 6, float(p.prev_deduction_compliance_rate), bold=True,
-            fill=SUMMARY_RESULT_FILL, number_format="0.00%",
-        )
-        ratio_formula = f"=IFERROR((D{r + 9}-F{r + 9})/F{r + 9},0)"
-        _set_summary_cell(
-            ws, r + 8, 7, ratio_formula, bold=True,
-            fill=SUMMARY_RESULT_FILL, number_format="0.00%",
-        )
-        _merge_with_style(ws, r + 8, 7, r + 9, 7)
-        ws.cell(row=r + 9, column=7).border = BORDER
-    else:
-        _set_summary_cell(ws, r + 9, 6, "", fill=SUMMARY_HEADER_FILL)
-        _set_summary_cell(ws, r + 8, 7, "/", bold=True, fill=SUMMARY_HEADER_FILL)
-        _merge_with_style(ws, r + 8, 7, r + 9, 7)
-        ws.cell(row=r + 9, column=7).border = BORDER
+    _merge_with_style(ws, r + 10, 2, r + 10, 3)
+    _paint_range(ws, r + 10, 2, r + 10, 3, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 10, 4, "扣重符合准确率", fill=SUMMARY_HEADER_FILL)
+    _merge_with_style(ws, r + 10, 4, r + 10, 5)
+    _paint_range(ws, r + 10, 4, r + 10, 5, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 10, 6, "第一阶段 ≥70%", fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 10, 7, _stage_status(dd_rate, 70.0), fill=SUMMARY_HEADER_FILL)
 
-    # ---- 行 11：价格差异分布 段落标题 ----
+    # 行 12-13：扣重数值
+    _set_summary_cell(ws, r + 11, 2, p.deduction_compliant_count, bold=True)
+    _merge_with_style(ws, r + 11, 2, r + 12, 3)
+    _paint_range(ws, r + 11, 2, r + 12, 3)
+    dd_rate_f = f"=IFERROR(B{r + 11}/E{r + 2},0)"
     _set_summary_cell(
-        ws, r + 10, 2, "价格差异分布区间（参考值）", bold=True, fill=SUMMARY_TITLE_FILL
+        ws, r + 11, 4, dd_rate_f, bold=True,
+        fill=SUMMARY_RESULT_FILL, number_format="0.00%",
     )
-    _merge_with_style(ws, r + 10, 2, r + 10, 5)
-    for cc in (3, 4, 5):
-        ws.cell(row=r + 10, column=cc).border = BORDER
-        ws.cell(row=r + 10, column=cc).fill = SUMMARY_TITLE_FILL
+    _merge_with_style(ws, r + 11, 4, r + 12, 5)
+    _paint_range(ws, r + 11, 4, r + 12, 5, SUMMARY_RESULT_FILL)
+    _set_summary_cell(ws, r + 11, 6, "第二阶段 ≥80%")
+    _set_summary_cell(ws, r + 11, 7, _stage_status(dd_rate, 80.0))
+    _set_summary_cell(ws, r + 12, 6, "第三阶段 ≥92%")
+    _set_summary_cell(ws, r + 12, 7, _stage_status(dd_rate, 92.0))
 
-    # ---- 行 12：4 档表头 ----
-    _set_summary_cell(ws, r + 11, 2, "差价 < 30, 车次数", fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 11, 3, "差价 30~50, 车次数", fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 11, 4, "差价 50~100, 车次数", fill=SUMMARY_HEADER_FILL)
-    _set_summary_cell(ws, r + 11, 5, "差价 > 100, 车次数", fill=SUMMARY_HEADER_FILL)
+    # 行 14：价格差异标题
+    _set_summary_cell(
+        ws, r + 13, 2, "价格差异分布区间 (参考值)", bold=True, fill=SUMMARY_TITLE_FILL
+    )
+    _merge_with_style(ws, r + 13, 2, r + 13, 7)
+    _paint_range(ws, r + 13, 2, r + 13, 7, SUMMARY_TITLE_FILL)
 
-    # ---- 行 13：4 档数值 ----
-    _set_summary_cell(ws, r + 12, 2, p.price_diff_lt30, bold=True)
-    _set_summary_cell(ws, r + 12, 3, p.price_diff_30_50, bold=True)
-    _set_summary_cell(ws, r + 12, 4, p.price_diff_50_100, bold=True)
-    _set_summary_cell(ws, r + 12, 5, p.price_diff_gt100, bold=True)
+    # 行 15：价格分档表头
+    _set_summary_cell(ws, r + 14, 2, "差价 < 30, 车次数", fill=SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 14, 3, "差价 30~50, 车次数", fill=SUMMARY_HEADER_FILL)
+    _merge_with_style(ws, r + 14, 3, r + 14, 4)
+    _paint_range(ws, r + 14, 3, r + 14, 4, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 14, 5, "差价 50~100, 车次数", fill=SUMMARY_HEADER_FILL)
+    _merge_with_style(ws, r + 14, 5, r + 14, 6)
+    _paint_range(ws, r + 14, 5, r + 14, 6, SUMMARY_HEADER_FILL)
+    _set_summary_cell(ws, r + 14, 7, "差价 > 100, 车次数", fill=SUMMARY_HEADER_FILL)
 
-    # ---- 行 14：4 档占比（公式：分母 = 周期内有效检判车次数 C{r+1}）----
-    for col_letter, col_idx in zip("BCDE", range(2, 6)):
-        formula = f"=IFERROR({col_letter}{r + 12}/C{r + 1},0)"
-        _set_summary_cell(
-            ws, r + 13, col_idx, formula, fill=SUMMARY_RESULT_FILL,
-            number_format="0.00%",
-        )
+    # 行 16：价格分档数值
+    _set_summary_cell(ws, r + 15, 2, p.price_diff_lt30, bold=True)
+    _set_summary_cell(ws, r + 15, 3, p.price_diff_30_50, bold=True)
+    _merge_with_style(ws, r + 15, 3, r + 15, 4)
+    _paint_range(ws, r + 15, 3, r + 15, 4)
+    _set_summary_cell(ws, r + 15, 5, p.price_diff_50_100, bold=True)
+    _merge_with_style(ws, r + 15, 5, r + 15, 6)
+    _paint_range(ws, r + 15, 5, r + 15, 6)
+    _set_summary_cell(ws, r + 15, 7, p.price_diff_gt100, bold=True)
 
-    # ---- F11:H14 合并空白（价格差异分布块没有环比/累计指标）----
-    _set_summary_cell(ws, r + 10, 6, "", fill=SUMMARY_HEADER_FILL)
-    _merge_with_style(ws, r + 10, 6, r + 13, 8)
-    for rr in range(r + 10, r + 14):
-        for cc in (6, 7, 8):
-            ws.cell(row=rr, column=cc).border = BORDER
-            ws.cell(row=rr, column=cc).fill = SUMMARY_HEADER_FILL
+    # 行 17：价格分档占比（分母 = 有效检判车次 E{r+1}）
+    _set_summary_cell(
+        ws, r + 16, 2, f"=IFERROR(B{r + 15}/E{r + 1},0)",
+        fill=SUMMARY_RESULT_FILL, number_format="0.00%",
+    )
+    _set_summary_cell(
+        ws, r + 16, 3, f"=IFERROR(C{r + 15}/E{r + 1},0)",
+        fill=SUMMARY_RESULT_FILL, number_format="0.00%",
+    )
+    _merge_with_style(ws, r + 16, 3, r + 16, 4)
+    _paint_range(ws, r + 16, 3, r + 16, 4, SUMMARY_RESULT_FILL)
+    _set_summary_cell(
+        ws, r + 16, 5, f"=IFERROR(E{r + 15}/E{r + 1},0)",
+        fill=SUMMARY_RESULT_FILL, number_format="0.00%",
+    )
+    _merge_with_style(ws, r + 16, 5, r + 16, 6)
+    _paint_range(ws, r + 16, 5, r + 16, 6, SUMMARY_RESULT_FILL)
+    _set_summary_cell(
+        ws, r + 16, 7, f"=IFERROR(G{r + 15}/E{r + 1},0)",
+        fill=SUMMARY_RESULT_FILL, number_format="0.00%",
+    )
 
 
 def _write_cumulative_sheet(
@@ -918,7 +854,7 @@ def _write_cumulative_sheet(
     """写用户截图式「累计统计」页。
 
     口径：
-      · 识别率 = 主料正确且差异≤10%车次 / 周期内有效检判车次
+      · 识别率 = 主料正确且差异<11%车次 / 周期内有效检判车次
       · 扣重符合率 = 扣重符合车次 / 周期内有效检判车次
     第二个分母刻意与 Sheet1 可见公式保持一致，避免“汇总页”和“概括页”
     对同一指标出现不同结果。
@@ -1043,21 +979,20 @@ def _write_cumulative_sheet(
 
 
 def _write_summary_sheet(ws, periods: List[PeriodSummary]) -> None:
-    """把多个周期写成「统计周期概括」sheet（每周期 14 行）"""
+    """把多个周期写成「统计周期概括」sheet（每周期 17 行，无环比）"""
     ws.column_dimensions["A"].width = 8
-    ws.column_dimensions["B"].width = 26
-    ws.column_dimensions["C"].width = 26
-    ws.column_dimensions["D"].width = 14
-    ws.column_dimensions["E"].width = 22
-    ws.column_dimensions["F"].width = 14
+    ws.column_dimensions["B"].width = 28
+    ws.column_dimensions["C"].width = 28
+    ws.column_dimensions["D"].width = 16
+    ws.column_dimensions["E"].width = 18
+    ws.column_dimensions["F"].width = 18
     ws.column_dimensions["G"].width = 12
-    ws.column_dimensions["H"].width = 14
+    ws.column_dimensions["H"].width = 8
 
     for idx, p in enumerate(periods, start=1):
         base_row = (idx - 1) * PERIOD_BLOCK_ROWS + 1
-        ws.row_dimensions[base_row].height = 18  # 行 1 (统计周期)
-        ws.row_dimensions[base_row + 4].height = 36  # 行 5 子表头多行
-        ws.row_dimensions[base_row + 8].height = 36  # 行 9 扣重条件多行
+        ws.row_dimensions[base_row + 5].height = 36
+        ws.row_dimensions[base_row + 10].height = 36
         _write_one_period_block(ws, base_row, idx, p)
 
 
