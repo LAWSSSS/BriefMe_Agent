@@ -4,8 +4,8 @@
     2026-08-27_桂ND3699_中废(40)、重废1(30)、重废3(20)、厚剪(10)
 
 单张原图：
-    日期_点位_第几辆车_料型占比_第几张图.jpg
-    2026_08_27_53_1_medium_40_zhongfei1_30_zhongfei3_20_houjian_10_1.jpg
+    日期_料型占比_点位_第几辆_第几张.jpg
+    20260827_medium_40_zhongfei1_30_zhongfei3_20_houjian_10_53_1_1.jpg
 """
 from __future__ import annotations
 
@@ -101,12 +101,12 @@ def build_truck_folder_name(
     return sanitize_fs_name(f"{date_part}_{build_truck_folder_stem(car_number, shares)}")
 
 
-def format_date_underscored(date_text: str) -> str:
-    matched = re.search(r"(\d{4})[-/]?(\d{2})[-/]?(\d{2})", date_text or "")
+def format_date_compact(date_text: str) -> str:
+    """2026-08-26 / 2026_08_26 → 20260826。"""
+    matched = re.search(r"(\d{4})[-/_]?(\d{2})[-/_]?(\d{2})", date_text or "")
     if not matched:
         raise ValueError(f"无法解析日期: {date_text!r}")
-    year, month, day = matched.groups()
-    return f"{year}_{month}_{day}"
+    return "".join(matched.groups())
 
 
 def resolve_station_code(station_number, detail: Optional[dict] = None) -> str:
@@ -138,12 +138,12 @@ def build_image_filename(
     image_index: int,
     ext: str = "jpg",
 ) -> str:
-    """日期_点位_第几辆车_料型占比_第几张图.jpg"""
-    date_part = format_date_underscored(date_text)
+    """日期_料型占比_点位_第几辆_第几张.jpg"""
+    date_part = format_date_compact(date_text)
     mat_part = format_filename_materials(shares)
     suffix = ext.lstrip(".") or "jpg"
     return (
-        f"{date_part}_{station}_{daily_index}_{mat_part}_{image_index}.{suffix}"
+        f"{date_part}_{mat_part}_{station}_{daily_index}_{image_index}.{suffix}"
     )
 
 
