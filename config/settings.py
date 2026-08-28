@@ -6,6 +6,25 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _load_dotenv(path: Path) -> None:
+    """读取本地 .env，已存在的环境变量不覆盖。"""
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'").strip('"')
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 @dataclass
@@ -77,10 +96,19 @@ class ShenglongConfig:
     # 业务目标值（图3注释）
     target_recognition_rate: float = 0.92  # 主料识别率 R 目标 ≥92%
     target_deduction_compliance_rate: float = 0.90  # 扣杂符合率目标 ≥90%
-    # 扣杂准确判定：0.5 ≤ 比值 ≤ 1.5 OR |误差| ≤ 0.15t
+    # 扣杂准确判定：0.5 ≤ 比值 ≤ 1.5 OR |误差| < 0.151t（未到 151kg 都算正确）
     deduction_ratio_lower: float = 0.5
     deduction_ratio_upper: float = 1.5
-    deduction_error_tolerance_ton: float = 0.15
+    deduction_error_tolerance_ton: float = 0.151
+
+    # 每天下完车次文件夹后，原样 scp 到推理测试机；失败只记日志不中断
+    remote_host: str = "10.180.34.16"
+    remote_port: int = 22
+    remote_user: str = "cisdi"
+    remote_image_root: str = (
+        "/mnt/data01/embedded/projects/wangyutai/sl_feigang/test_images_full_car"
+    )
+    remote_scp_timeout_sec: int = 1800
 
 
 @dataclass
@@ -106,10 +134,11 @@ class VPNConfig:
 
 @dataclass
 class LLMConfig:
-    """智谱 GLM 配置"""
+    """对话模型配置（默认 DeepSeek，OpenAI 兼容接口）"""
 
-    api_key: str = os.getenv("ZHIPU_API_KEY", "")
-    model: str = "glm-4-flash"
+    api_key: str = os.getenv("DEEPSEEK_API_KEY", "") or os.getenv("ZHIPU_API_KEY", "")
+    base_url: str = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
+    model: str = os.getenv("LLM_MODEL", "deepseek-chat")
 
 
 @dataclass
@@ -159,7 +188,7 @@ class Settings:
         """检查配置完整性，返回缺失项列表"""
         issues = []
         if not self.llm.api_key:
-            issues.append("未配置 ZHIPU_API_KEY 环境变量")
+            issues.append("未配置 DEEPSEEK_API_KEY 环境变量")
         return issues
 
 

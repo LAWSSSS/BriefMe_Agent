@@ -180,13 +180,13 @@ class TruckStat:
     final_steel_price: Optional[float] = None  # 最终结算单价（顶层 finalPrice）
 
     # --- 派生指标 ---
-    main_name_match: Optional[bool] = None  # 仅料型名字一致（不带 ≤10% 约束）
-    main_same: Optional[bool] = None  # None=无法判定, True=名字一致 AND 差异≤10%, False=不满足
-    diff_rate: Optional[float] = None  # 差异值 %，一致时=abs(人工占比-AI对应料型占比)
+    main_name_match: Optional[bool] = None  # 仅料型名字一致（并列主料任一命中）
+    main_same: Optional[bool] = None  # None=无法判定, True=名字一致 AND 差异<11%, False=不满足
+    diff_rate: Optional[float] = None  # 差异值 %，命中时=abs(人工占比-AI对应料型占比)
     # 扣重
     weight_diff_ton: Optional[float] = None  # AI - 人工（带正负）
     weight_ratio: Optional[float] = None  # AI / 人工
-    # 扣杂符合：0.5≤ratio≤1.5 OR |diff|≤0.15t
+    # 扣杂符合：0.5≤ratio≤1.5 OR |diff| < 0.151t
     deduction_compliant: Optional[bool] = None
     # 单价差异
     price_diff: Optional[float] = None  # |AI - 人工|
@@ -223,12 +223,12 @@ class DailyShenglongStats:
 
     @property
     def main_name_match_count(self) -> int:
-        """主料型名字一致的车数（不要求 ≤10% 差异）"""
+        """主料型名字一致的车数（不要求 <11% 差异）"""
         return sum(1 for t in self.trucks if t.main_name_match is True)
 
     @property
     def main_same_count(self) -> int:
-        """主料型正确车数 = 名字一致 AND 差异 ≤ 10%"""
+        """主料型正确车数 = 名字一致 AND 差异 < 11%"""
         return sum(1 for t in self.trucks if t.main_same is True)
 
     @property
@@ -327,13 +327,13 @@ class PeriodSummary:
 
     judgable_trucks: int = 0
     main_name_match_count: int = 0  # 主料型名字一致车数
-    main_within_10pct_count: int = 0  # 其中差异≤10% 车次数 (= main_same_count)
+    main_within_10pct_count: int = 0  # 其中差异<11% 车次数 (= main_same_count)
 
     # Sheet1 识别率区域文案。默认是原有主料型口径；重废归一化主表会覆盖这些文案。
     recognition_section_title: str = "识别率"
     recognition_condition1_label: str = "主料型相同车次数"
-    recognition_condition2_label: str = "其中主料型占比差异\n小于10% 车次数"
-    recognition_result_label: str = "识别准确率"
+    recognition_condition2_label: str = "其中主料型占比差异\n小于11% 车次数"
+    recognition_result_label: str = "综合识别准确率"
     cumulative_recognition_label: str = "累计准确率"
     recognition_match_label: str = "主料识别率"
 
@@ -365,19 +365,25 @@ class PeriodSummary:
     cumulative_deduction_compliance_rate: Optional[float] = None
 
     @property
+    def main_name_match_rate_pct(self) -> Optional[float]:
+        """主料型识别率（%）= 主料型相同车次 / 周期内有效检判车次"""
+        if self.judgable_trucks == 0:
+            return None
+        return self.main_name_match_count / self.judgable_trucks * 100.0
+
+    @property
     def recognition_rate_pct(self) -> Optional[float]:
-        """识别准确率（%）= 主料正确（差异≤10%）/ 周期内有效检判车次"""
+        """综合识别准确率（%）= 主料正确（差异<11%）/ 周期内有效检判车次"""
         if self.judgable_trucks == 0:
             return None
         return self.main_within_10pct_count / self.judgable_trucks * 100.0
 
     @property
     def deduction_compliance_rate_pct(self) -> Optional[float]:
-        """扣杂符合率（%）"""
-        # 修复 Bug：分母必须是有效检判车次 (judgable_trucks)，而不是 deduction_evaluable
-        if self.judgable_trucks == 0:
+        """扣重符合率（%）= 符合车次 / 周期内有效扣重车次"""
+        if self.deduction_evaluable == 0:
             return None
-        return self.deduction_compliant_count / self.judgable_trucks * 100.0
+        return self.deduction_compliant_count / self.deduction_evaluable * 100.0
 
 
 # ----------------------------------------------------------------------

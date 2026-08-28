@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     result = download_images_by_date_range(
         args.start,
         args.end,
-        output_dir=args.output,
+        output_dir=args.output or (Path.cwd() / "shenglong_images"),
         progress_callback=progress,
         include_missing_manual=not args.no_manual,
     )

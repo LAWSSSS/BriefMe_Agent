@@ -9,5 +9,5 @@ from agent.shenglong.downloader import (
     TruckDownloadResult,
     download_images_by_date_range,
     download_truck_images,
+    iter_download_images,
 )
-

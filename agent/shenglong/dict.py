@@ -45,6 +45,27 @@ STEEL_TYPE: dict[int, str] = {
     16: "超标",
 }
 
+# 检判原图文件名用的英文码（与页面/数据集约定一致）
+STEEL_TYPE_EN: dict[int, str] = {
+    0: "",
+    1: "zhongfei1",
+    2: "zhongfei2",
+    3: "zhongfei3",
+    4: "jianliao1",
+    5: "jianliao2",
+    6: "jianliao3",
+    7: "jianliao4",
+    8: "posuiliao1",
+    9: "posuiliao2",
+    10: "posuiliao3",
+    11: "medium",
+    12: "shengtie",
+    13: "houjian",
+    14: "gangjinqieli",
+    15: "qicheke",
+    16: "chaobiao",
+}
+
 # 参考型：不参与主料判定，只作为辅助维度统计（超尺寸废钢占比）
 REFERENCE_TYPES: frozenset[int] = frozenset({16})
 
@@ -116,6 +137,16 @@ MATERIAL_PRIORITY: dict[int, int] = {
 }
 
 
+def get_material_en(steel_type: Optional[int]) -> str:
+    """把 steelType 编码转为英文码；空/未知返回 unknown{code}。"""
+    if steel_type is None:
+        return "unknown"
+    code = int(steel_type)
+    if code in EMPTY_TYPES:
+        return "unknown"
+    return STEEL_TYPE_EN.get(code, f"unknown{code}")
+
+
 def get_material_name(steel_type: Optional[int]) -> str:
     """把 steelType 编码转为中文名；空/未知返回 "--"。
 
@@ -167,10 +198,26 @@ def filter_main_candidates(
     return out
 
 
+def get_tied_main_types(
+    items: Iterable[Tuple[Optional[int], float]],
+    *,
+    eps: float = 1e-6,
+) -> List[Tuple[int, float]]:
+    """返回所有并列最高占比的合法主料型。
+
+    例如重废1 40%、重废2 40% 会同时返回这两项，供「任一命中即正确」判定。
+    """
+    filtered = filter_main_candidates(items)
+    if not filtered:
+        return []
+    top = max(rate for _, rate in filtered)
+    return [(st, rate) for st, rate in filtered if abs(rate - top) <= eps]
+
+
 def get_main_type_from_list(
     items: Iterable[Tuple[Optional[int], float]],
 ) -> Optional[Tuple[int, float]]:
-    """从料型占比列表中取占比最高的合法主料型。
+    """从料型占比列表中取占比最高的合法主料型（展示用，平局走优先级）。
 
     Args:
         items: 形如 [(steelType, rate), ...]；rate 建议统一到"百分比"或"0~1"任一种口径
@@ -181,12 +228,11 @@ def get_main_type_from_list(
     filtered = filter_main_candidates(items)
     if not filtered:
         return None
-    
-    # 【核心修改】排序规则：
-    # 1. 优先按 rate 降序（-x[1]）
+
+    # 1. 优先按 rate 降序
     # 2. 当 rate 相同时，按 MATERIAL_PRIORITY 升序（越小越优先，找不到的给999垫底）
     filtered.sort(key=lambda x: (-x[1], MATERIAL_PRIORITY.get(x[0], 999)))
-    
+
     return filtered[0]
 
 def lookup_rate_of(

@@ -20,7 +20,10 @@ from typing import Dict, List, Optional, Tuple
 import gradio as gr
 import httpx
 
-from agent.core import SteelCoilAgent
+from agent.core import SteelCoilAgent, _parse_save_path
+from agent.shenglong.calculator import last_complete_7_days
+from agent.shenglong.downloader import iter_download_images, parse_requested_dates
+from agent.shenglong.packager import pack_multilabel_from_disk
 from config.settings import settings
 
 logging.basicConfig(
@@ -194,6 +197,7 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
     yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
     week_start = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
     today_s = date.today().strftime("%Y-%m-%d")
+    sl_week_start, sl_week_end = last_complete_7_days()
     return {
         "永锋钢铁": {
             "打包带钢卷": {
@@ -236,15 +240,25 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             },
         },
         "盛隆钢铁": {
-            "MINIO图像下载": {
-                "MINIO图像下载": "MINIO图像下载 2026-05-01 到 2026-05-07",
-            },
-            "3000网站图像下载": {
-                "3000网站图像下载": "3000网站图像下载 2026-05-01 到 2026-05-07",
+            "检判原图下载": {
+                "下载昨日检判原图": f"下载 {yesterday} 的【盛隆】检判原图",
+                "下载近 7 天检判原图": (
+                    f"下载 {sl_week_start} 到 {sl_week_end} 的【盛隆】检判原图"
+                ),
+                "指定日期下载": "下载 2026-08-01 的【盛隆】检判原图",
+                "指定多个日期下载": (
+                    "下载 2026-08-01、2026-08-03、2026-08-05 的【盛隆】检判原图"
+                ),
+                "确认打包多标签（全部已筛日期）": (
+                    "确认打包保存目录下已筛完的【盛隆】废钢多标签分类数据集"
+                ),
+                "确认打包指定日期多标签": (
+                    "确认打包 2026-08-01、2026-08-03 的【盛隆】废钢多标签分类数据集"
+                ),
             },
             "废钢检判": {
                 "昨日废钢检判情况": f"发 {yesterday} 的【盛隆】废钢检判情况",
-                "近 7 天报表": f"导出 {week_start} 到 {today_s} 的【盛隆】废钢检判报表",
+                "近 7 天报表": f"导出 {sl_week_start} 到 {sl_week_end} 的【盛隆】废钢检判报表",
                 "主表（多周期累积）": (
                     "生成【盛隆】主表，把这两个周期累积到一个 xlsx："
                     "2026-04-14 至 2026-04-22、2026-04-23 至 2026-04-29"
@@ -584,6 +598,12 @@ def build_ui() -> gr.Blocks:
                     '</div>'
                 )
 
+                download_dir = gr.Textbox(
+                    label="图像保存路径（盛隆检判原图必填）",
+                    placeholder="/Users/你的用户名/Desktop/盛隆图像",
+                    lines=1,
+                )
+
                 gr.HTML('<div class="side-title">使用提示</div>')
                 gr.Markdown(
                     "- 问**打包带**：用「钢卷 / 打包带 / 打数 / 应打数 / 永锋」等词\n"
@@ -594,6 +614,7 @@ def build_ui() -> gr.Blocks:
                     "- **重废归一化主表**会排除人工无任意重废1/2/3的车次\n"
                     "- **镔鑫球机图像**：在指令中写明日期、工号、密码即可\n"
                     "- **用友检判统计**：在指令中写明日期、账号、密码，自动下载图片+生成带图的 Excel\n"
+                    "- **盛隆检判原图**：先填路径再下载；多标签包要人工删图后点「确认打包」\n"
                     "- 按钮只是填好文字，**回车**发送"
                 )
 
@@ -700,93 +721,134 @@ def build_ui() -> gr.Blocks:
                 return "", history
             return "", history + [{"role": "user", "content": message}]
 
-        # ========== 下载功能处理器（流式）==========
-        def download_minio_handler(message, history, session):
+        def _is_shenglong_multilabel_pack(message: str) -> bool:
+            if "多标签" in message and ("打包" in message or "确认打包" in message):
+                return True
+            return False
+
+        def _is_shenglong_image_download(message: str) -> bool:
+            if _is_shenglong_multilabel_pack(message):
+                return False
+            if "MINIO图像下载" in message or "3000网站图像下载" in message:
+                return True
+            if "检判原图" in message and ("盛隆" in message or "【盛隆】" in message):
+                return True
+            if "盛隆" in message and (
+                "图像下载" in message or "图片下载" in message or "智能判级照片" in message
+            ):
+                return True
+            return False
+
+        def pack_multilabel_handler(message, history, session, save_dir):
             history = _normalize_chat_history(history)
+            dest = (save_dir or "").strip() or _parse_save_path(message)
+            dates = parse_requested_dates(message)
+            xlsx, pptx, imgs = _scan_latest_artifacts()
+            if not dest:
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "请先在左侧填写「图像保存路径」（须与下载时同一目录），"
+                        "再确认打包废钢多标签分类数据集。"
+                    ),
+                })
+                yield history, session, xlsx, pptx, imgs, None
+                return
+            try:
+                result = pack_multilabel_from_disk(dest, dates=dates or None)
+            except Exception as exc:
+                history.append({"role": "assistant", "content": f"❌ 打包失败: {exc}"})
+                yield history, session, xlsx, pptx, imgs, None
+                return
+            lines = ["✅ 已按人工筛完后的原图打包「废钢多标签分类数据集」"]
+            for day in result.get("days") or []:
+                if day.get("skipped"):
+                    lines.append(f"- {day.get('date')}: 没有可打包的图，已跳过")
+                else:
+                    lines.append(
+                        f"- {day.get('date')}: {day.get('images')} 张 → {day.get('zip')}"
+                    )
+            if not result.get("zip_files"):
+                lines.append("没有生成任何压缩包。请确认目录里还有车次图片。")
+            history.append({"role": "assistant", "content": "\n".join(lines)})
+            yield history, session, xlsx, pptx, imgs, None
 
-            import re
-            from datetime import datetime, timedelta
-            from minio import Minio
-            from agent.shenglong.minio_downloader import MINIO_HOST, MINIO_API_PORT, BUCKET, PREFIX_BASE, ACCESS_KEY, SECRET_KEY, download_and_pack
-
-            match = re.search(r'(\d{4}-\d{2}-\d{2})\s*到\s*(\d{4}-\d{2}-\d{2})', message)
-            if not match:
-                history.append({"role": "assistant", "content": "请使用格式：MINIO图像下载 YYYY-MM-DD 到 YYYY-MM-DD"})
-                xlsx, pptx, imgs = _scan_latest_artifacts()
+        def download_shenglong_handler(message, history, session, save_dir):
+            history = _normalize_chat_history(history)
+            dest = (save_dir or "").strip() or _parse_save_path(message)
+            dates = parse_requested_dates(message)
+            xlsx, pptx, imgs = _scan_latest_artifacts()
+            if not dest:
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "请先在左侧填写「图像保存路径」，例如 "
+                        "`/Users/你的用户名/Desktop/盛隆图像`，再发送下载指令。"
+                        "图会立刻写到这个目录，中断后重新跑同一日期即可续传。"
+                    ),
+                })
+                yield history, session, xlsx, pptx, imgs, None
+                return
+            if not dates:
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "请写明日期。单日：下载 2026-08-01 的【盛隆】检判原图；"
+                        "多日：下载 2026-08-01、2026-08-03 的【盛隆】检判原图；"
+                        "连续区间：下载 2026-08-01 到 2026-08-03 的【盛隆】检判原图。"
+                    ),
+                })
                 yield history, session, xlsx, pptx, imgs, None
                 return
 
-            start_date = match.group(1)
-            end_date = match.group(2)
-
-            client = Minio(
-                f"{MINIO_HOST}:{MINIO_API_PORT}",
-                access_key=ACCESS_KEY,
-                secret_key=SECRET_KEY,
-                secure=False,
-            )
-            start = datetime.strptime(start_date, "%Y-%m-%d").date()
-            end = datetime.strptime(end_date, "%Y-%m-%d").date()
-            total_files = 0
-            current = start
-            while current <= end:
-                prefix = f"{PREFIX_BASE}/{current.isoformat()}/"
-                try:
-                    objects = list(client.list_objects(BUCKET, prefix=prefix, recursive=True))
-                    files = [o for o in objects if o.size and o.size > 0]
-                    total_files += len(files)
-                except Exception:
-                    pass
-                current += timedelta(days=1)
-
-            history.append({"role": "assistant", "content": f"📥 正在下载 {start_date} 到 {end_date} 的 MINIO 图像，共 {total_files} 个文件..."})
-            xlsx, pptx, imgs = _scan_latest_artifacts()
+            date_label = "、".join(dates)
+            note = ""
+            if "MINIO图像下载" in message:
+                note = "已改为走 3000 业务系统，不再扫描 MinIO 桶。\n"
+            history.append({
+                "role": "assistant",
+                "content": (
+                    f"{note}📥 开始从 3000 下载 {date_label} 的智能判级原图\n"
+                    f"保存目录：{dest}\n"
+                    "每下一车就会写到磁盘，可在该目录看进度。"
+                ),
+            })
             yield history, session, xlsx, pptx, imgs, None
 
-            zip_path, success, failed = download_and_pack(start_date, end_date)
-            if zip_path:
-                history.append({"role": "assistant", "content": f"\n\n✅ 下载完成！成功 {success} 个文件，失败 {failed} 个\n\n点击下方「📦 下载图片包」按钮下载 ZIP 文件到本地。"})
-                xlsx, pptx, imgs = _scan_latest_artifacts()
-                yield history, session, xlsx, pptx, imgs, zip_path
-            else:
-                history.append({"role": "assistant", "content": "❌ 下载失败"})
-                xlsx, pptx, imgs = _scan_latest_artifacts()
-                yield history, session, xlsx, pptx, imgs, None
-
-        def download_3000_handler(message, history, session):
-            history = _normalize_chat_history(history)
-
-            import re
-            from agent.shenglong.downloader import download_images_by_date_range
-
-            match = re.search(r'(\d{4}-\d{2}-\d{2})\s*到\s*(\d{4}-\d{2}-\d{2})', message)
-            if not match:
-                history.append({"role": "assistant", "content": "请使用格式：3000网站图像下载 YYYY-MM-DD 到 YYYY-MM-DD"})
+            lines = [history[-1]["content"]]
+            try:
+                for event in iter_download_images(output_dir=dest, dates=dates):
+                    if event.get("type") == "done":
+                        result = event.get("result") or {}
+                        zips = result.get("zip_files") or []
+                        zip_text = "\n".join(f"- {p}" for p in zips) if zips else "- 无"
+                        scp_text = result.get("scp_report") or ""
+                        lines.append(
+                            f"✅ 完成：新下载 {result.get('success', 0)} 张，"
+                            f"跳过 {result.get('skipped_existing', 0)} 张，"
+                            f"失败 {result.get('failed', 0)} 张\n"
+                            f"进度日志：{result.get('output_dir')}/download_progress.log\n"
+                            f"实例/边缘分割包：\n{zip_text}\n"
+                            f"{scp_text}\n"
+                            "「废钢多标签分类数据集」还没打。"
+                            "请按日期、按车次打开文件夹删掉不合格图，"
+                            "再点指令「确认打包多标签」或在对话里说确认打包。"
+                        )
+                    else:
+                        msg_line = event.get("message") or ""
+                        if msg_line:
+                            lines.append(msg_line)
+                    history[-1]["content"] = "\n".join(lines[-50:])
+                    xlsx, pptx, imgs = _scan_latest_artifacts()
+                    yield history, session, xlsx, pptx, imgs, None
+            except Exception as exc:
+                lines.append(f"❌ 下载中断：{exc}\n已写入的文件仍在 {dest}，重跑同一日期会跳过已有文件。")
+                history[-1]["content"] = "\n".join(lines[-50:])
                 xlsx, pptx, imgs = _scan_latest_artifacts()
                 yield history, session, xlsx, pptx, imgs, None
-                return
-
-            start_date = match.group(1)
-            end_date = match.group(2)
-            history.append({"role": "assistant", "content": f"📥 正在下载 {start_date} 到 {end_date} 的 3000 网站图像（无需筛选），请稍候..."})
-            xlsx, pptx, imgs = _scan_latest_artifacts()
-            yield history, session, xlsx, pptx, imgs, None
-
-            result = download_images_by_date_range(
-                start_date,
-                end_date,
-                output_dir=SHENGLONG_ROOT,
-                include_missing_manual=True,
-            )
-
-            success = result.get("success", 0)
-            failed = result.get("failed", 0)
-            history.append({"role": "assistant", "content": f"\n\n✅ 下载完成！成功 {success} 个文件，失败 {failed} 个\n\n输出目录：{result.get('output_dir', '')}"})
-            xlsx, pptx, imgs = _scan_latest_artifacts()
-            yield history, session, xlsx, pptx, imgs, None
 
         # ========== 其他功能处理器（普通）==========
-        def normal_handler(user_message, history, session):
+        def normal_handler(user_message, history, session, save_dir):
             history = _normalize_chat_history(history)
             
             if not user_message:
@@ -796,7 +858,7 @@ def build_ui() -> gr.Blocks:
             # 添加用户消息
             # history.append({"role": "user", "content": user_message})
             
-            # 调用 Agent
+            agent._default_shenglong_output_dir = (save_dir or "").strip()
             reply, session = agent.chat(user_message, session)
             
             history.append({"role": "assistant", "content": str(reply)})
@@ -804,8 +866,7 @@ def build_ui() -> gr.Blocks:
             return history, session, xlsx, pptx, imgs, None
 
         # ========== 路由处理器 ==========
-        def route_handler(_pending_message, history, session):
-            # 获取用户消息
+        def route_handler(_pending_message, history, session, save_dir):
             user_message = ""
             if history and len(history) > 0:
                 last_item = history[-1]
@@ -816,19 +877,20 @@ def build_ui() -> gr.Blocks:
                         user_message = "".join(text_parts).strip()
                     else:
                         user_message = str(content).strip()
-            
-            # 判断是否是下载指令
-            if "MINIO图像下载" in user_message:
-                # 下载功能：走 minio_downloader 逻辑
-                for result in download_minio_handler(user_message, history, session):
+
+            agent._default_shenglong_output_dir = (save_dir or "").strip()
+            if _is_shenglong_multilabel_pack(user_message):
+                for result in pack_multilabel_handler(
+                    user_message, history, session, save_dir
+                ):
                     yield result
-            elif "3000网站图像下载" in user_message:
-                # 下载功能：走 downloader.py 逻辑
-                for result in download_3000_handler(user_message, history, session):
+            elif _is_shenglong_image_download(user_message):
+                for result in download_shenglong_handler(
+                    user_message, history, session, save_dir
+                ):
                     yield result
             else:
-                # 其他功能：普通模式
-                result = normal_handler(user_message, history, session)
+                result = normal_handler(user_message, history, session, save_dir)
                 yield result
 
         # 绑定
@@ -850,7 +912,7 @@ def build_ui() -> gr.Blocks:
             queue=False,
         ).then(
             route_handler,
-            inputs=[msg, chatbot, session],
+            inputs=[msg, chatbot, session, download_dir],
             outputs=[chatbot, session, report_file, pptx_file, gallery, download_zip_file],
         )
 
