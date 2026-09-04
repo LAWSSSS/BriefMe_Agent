@@ -24,6 +24,12 @@ from agent.data_fetcher import VisionAPIClient
 from agent.llm_client import OpenAICompatClient
 from agent.shenglong.downloader import download_images_by_date_range
 from agent.shenglong.packager import pack_multilabel_from_disk
+from agent.yongfeng.downloader import (
+    download_images_by_date_range as download_yongfeng_images_by_date_range,
+)
+from agent.yongfeng.scrap_packager import (
+    pack_multilabel_from_disk as pack_yongfeng_multilabel_from_disk,
+)
 from agent.tools import TOOLS
 from agent.vpn_manager import VPNManager
 from config.settings import settings
@@ -110,13 +116,14 @@ def _build_system_prompt() -> str:
     return (
         "你是 BriefMe，中冶赛迪（重庆）信息技术有限公司内部使用的多场景数据统计智能助手，"
         "帮助员工完成各业务场景下的数据每日/周期统计汇总与报表生成工作。"
-        "当前已接入以下四个项目（分别部署于不同钢厂现场）：\n"
+        "当前已接入以下项目（分别部署于不同钢厂现场）：\n"
         "  【打包带钢卷】视觉检测统计 · 部署于 **永锋钢铁** 现场\n"
         "  【废钢检判】赛迪 AI 检判 vs 人工检判对比统计 · 部署于 **镔鑫钢铁** 现场\n"
         "  【废钢检判】赛迪 AI 检判 vs 人工检判对比统计 · 部署于 **盛隆钢铁** 现场\n"
         "  【烧结矿颗粒度准确率】赛迪视觉 vs 人工筛分对比统计 · 部署于 **永锋钢铁** 现场\n"
-        "注意：四个项目数据来源完全独立（不同的钢厂/不同的 VPN/不同的视觉系统），"
-        "严禁把一个钢厂的数据混到另一个里。\n"
+        "  【检判原图下载】永锋废钢智能判级原图 · 部署于 **永锋钢铁** 现场（srape-steel，与烧结矿、打包带分开）\n"
+        "注意：各项目数据来源完全独立（不同的钢厂/不同的 VPN/不同的视觉系统），"
+        "严禁把一个钢厂的数据混到另一个里。打包带、烧结矿、永锋检判原图、盛隆检判原图都要分开。\n"
         "当用户询问数据时，必须调用工具，绝对不要编造数据。\n\n"
         "=============== 严格路由规则（现场演示防误判）===============\n"
         "工具分四类：\n"
@@ -137,10 +144,16 @@ def _build_system_prompt() -> str:
         "    每个日期的车次文件夹下完后会 scp 到推理测试机；scp 失败只在总结里说明，不中断下载。\n"
         "  - pack_shenglong_multilabel （人工筛图后，确认打包废钢多标签分类数据集）\n"
         "    （盛隆暂不支持 PPT 生成）\n\n"
-        "【永锋烧结矿颗粒度准确率】工具（yongfeng_ 前缀）：\n"
+        "【永锋烧结矿颗粒度准确率】工具（yongfeng_ 前缀报表）：\n"
         "  - yongfeng_export_accuracy_report （指定时间范围内的人工筛分 vs 视觉准确率报表）\n"
         "    该工具由 GLM function calling 触发；只要用户明确说【生成/导出/统计 永锋烧结矿颗粒度准确率报表】，"
-        "    就应优先选择此工具。\n\n"
+        "    就应优先选择此工具。不要和下文【永锋检判原图】混淆。\n\n"
+        "【永锋检判原图下载】工具：\n"
+        "  - download_yongfeng_images （从永锋 srape-steel 下载智能判级原图并按车次命名/打包）\n"
+        "    该工具必须带上用户指定的本机保存路径 output_dir。"
+        "    若用户没给路径，仍先调用工具并把 output_dir 设为空字符串，系统会追问路径。"
+        "    未配置 scp 则跳过；scp 失败只在总结里说明，不中断下载。\n"
+        "  - pack_yongfeng_multilabel （人工筛图后，确认打包永锋废钢多标签分类数据集）\n\n"
         "【镔鑫球机图像下载+重命名】工具（bxsteel_ 前缀）：\n"
         "  - bxsteel_download_images （从镔鑫废钢智能检判系统下载球机原图并重命名，默认下载昨天）\n"
         "    该工具需要用户提供工号和密码。即使当前消息中未提供凭证，"
@@ -164,26 +177,34 @@ def _build_system_prompt() -> str:
         "   → 必须反问：『请问你问的是【镔鑫废钢】还是【盛隆废钢】？这两个是不同钢厂，数据独立。』\n"
         "   禁止自行猜测。\n"
         "5. 用户说【烧结矿 / 颗粒度 / 人工筛分 / 视觉 / 准确率 / 报表 / 永锋准确率】\n"
-        "   → 必须走【永锋烧结矿准确率】专用报表路径，触发 yongfeng_export_accuracy_report 工具。\n"
+        "   → 必须走【永锋烧结矿准确率】专用报表路径，触发 yongfeng_export_accuracy_report 工具。"
+        "   若同时出现【检判原图】则不要走烧结矿。\n"
         "6. 打包带关键词和废钢/烧结矿关键词都出现 或 都没有\n"
-        "   → 反问：『请问你问的是【打包带钢卷 @ 永锋】、【废钢检判 @ 镔鑫】、【废钢检判 @ 盛隆】、还是【永锋烧结矿准确率】？』\n"
+        "   → 反问：『请问你问的是【打包带钢卷 @ 永锋】、【废钢检判 @ 镔鑫】、【废钢检判 @ 盛隆】、【永锋烧结矿准确率】、还是【永锋检判原图】？』\n"
         "7. 反问一次之后，根据用户回答里的关键词再决定走哪条路径；依然不明确则继续反问。\n"
         "8. 用户说【下载镔鑫球机图像 / 球机图像下载 / 球机原图下载 / 下载车辆图片】\n"
         "   → 走 bxsteel_download_images 工具。即使没有凭证也先调用，系统会弹出输入提示。\n"
         "9. 用户说【下载用友检判结果图 / 用友图片下载 / 用友检判图 / 用友检判统计 / 下载用友质检判级图】\n"
         "   → 走 yongyou_download_images 工具。即使没有凭证也先调用，系统会弹出输入提示。\n"
-        "10. 用户说【下载盛隆检判原图 / 盛隆图像下载 / 3000网站图像下载 / 智能判级照片】\n"
+        "10. 用户说【下载盛隆检判原图 / 盛隆图像下载 / 3000网站图像下载】或【盛隆】+【智能判级照片/检判原图】\n"
         "   → 走 download_shenglong_images。只走 3000 业务系统，不要提 MinIO。\n"
         "   必须带上保存路径；路径可来自用户原文或页面「保存路径」输入框。\n"
         "   单日：start_date=end_date；连续区间：start_date 到 end_date；"
         "   多个不连续日期（顿号/逗号分隔）：填 dates 数组，不要把中间天补进去。\n"
-        "   下载完成后不要自动打「废钢多标签分类数据集」。等用户说【确认打包 / 打包多标签】"
+        "   下载完成后不要自动打「废钢多标签分类数据集」。等用户说【确认打包 / 打包多标签】且指明盛隆"
         "   再调用 pack_shenglong_multilabel。实例/边缘分割包由下载流程自动生成。\n"
+        "11. 用户说【下载永锋检判原图】或【永锋】+【检判原图/智能判级照片/图像下载】（且不是烧结矿）\n"
+        "   → 走 download_yongfeng_images。只走永锋 srape-steel，不要走盛隆、不要走烧结矿报表。\n"
+        "   必须带上保存路径；没有路径时 output_dir 传空字符串。\n"
+        "   单日 / A 到 B / 顿号多日规则与盛隆相同。未配置 scp 则跳过。\n"
+        "   下载完成后不要自动打多标签。等用户确认后再调用 pack_yongfeng_multilabel。\n"
+        "12. 用户只说【检判原图】而未指明盛隆或永锋\n"
+        "   → 必须反问：『请问是【盛隆检判原图】还是【永锋检判原图】？两个钢厂数据独立。』\n"
         "路由错误会引发严重现场事故，请严格遵守。\n\n"
         f"今天是{today.strftime('%Y-%m-%d')}，"
         f"昨天是{yesterday.strftime('%Y-%m-%d')}，"
         f"前天是{day_before.strftime('%Y-%m-%d')}。\n"
-        "盛隆「近7天 / 近一周」报表：统计区间必须是昨天往前共 7 个自然日"
+        "盛隆/永锋检判原图「近7天 / 近一周」：区间必须是昨天往前共 7 个自然日"
         "（含昨天、不含今天）。例如今天是 2026-08-27，则 "
         "start_date=2026-08-20、end_date=2026-08-26。不要把今天算进去。\n\n"
         "=============== 永锋烧结矿准确率输出格式 ===============\n"
@@ -274,6 +295,8 @@ class SteelCoilAgent:
         self._yongyou_pending_args: Optional[Dict[str, Any]] = None  # 待下载的用友参数
         self._shenglong_pending_args: Optional[Dict[str, Any]] = None
         self._default_shenglong_output_dir: str = ""
+        self._yongfeng_pending_args: Optional[Dict[str, Any]] = None
+        self._default_yongfeng_output_dir: str = ""
 
         if settings.llm.api_key:
             self.client = OpenAICompatClient(
@@ -342,6 +365,9 @@ class SteelCoilAgent:
 
         if vpn_state == "waiting_shenglong_dir":
             return self._handle_shenglong_dir(user_message, session)
+
+        if vpn_state == "waiting_yongfeng_dir":
+            return self._handle_yongfeng_dir(user_message, session)
 
         return self._process_message(user_message, session)
 
@@ -564,6 +590,43 @@ class SteelCoilAgent:
         session["messages"].append({"role": "assistant", "content": text})
         return text, session
 
+    def _handle_yongfeng_dir(
+        self, user_input: str, session: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
+        pending = self._yongfeng_pending_args
+        if not pending:
+            session["vpn_state"] = "unknown"
+            return self._process_message(user_input, session)
+
+        output_dir = _parse_save_path(user_input)
+        if not output_dir:
+            return (
+                "还没有识别到本机路径。请按下面格式回复：\n\n"
+                "```\n"
+                "保存地址：/Users/你的用户名/Desktop/永锋图像\n"
+                "```",
+                session,
+            )
+
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        if not pending.get("start_date"):
+            pending["start_date"] = yesterday
+        if not pending.get("end_date"):
+            pending["end_date"] = pending["start_date"]
+        pending["output_dir"] = output_dir
+
+        session["vpn_state"] = "unknown"
+        self._yongfeng_pending_args = None
+        result = self._tool_download_yongfeng_images(
+            pending.get("start_date", ""),
+            pending.get("end_date", ""),
+            pending.get("output_dir"),
+            pending.get("dates"),
+        )
+        text = result.get("summary_text", "下载完成")
+        session["messages"].append({"role": "assistant", "content": text})
+        return text, session
+
     # ------------------------------------------------------------------
     #  核心消息处理：LLM 意图解析 → 工具调用 → 格式化回复
     # ------------------------------------------------------------------
@@ -594,15 +657,22 @@ class SteelCoilAgent:
             return reply, session
 
         tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
-        # 盛隆图像下载、镔鑫球机图像下载、用友图片下载工具不需要检查永锋 VPN
+        # 盛隆图像、永锋检判原图/多标签、镔鑫球机、用友图片不走打包带「视觉 API 配置」校验。
+        # 永锋检判原图与打包带同属永锋专网，单独走打包带连通性，避免把烧结/打包带接口 TODO 当成前置条件。
+        yongfeng_image_tool = any(n == "download_yongfeng_images" for n in tool_names)
         any_packing_tool = any(
-            not n.startswith("scrap_") and not n.startswith("shenglong_") and not n.startswith("bxsteel_") and not n.startswith("yongyou_") and n != "download_shenglong_images" and n != "pack_shenglong_multilabel"
+            not n.startswith("scrap_")
+            and not n.startswith("shenglong_")
+            and not n.startswith("bxsteel_")
+            and not n.startswith("yongyou_")
+            and n != "download_shenglong_images"
+            and n != "pack_shenglong_multilabel"
+            and n != "download_yongfeng_images"
+            and n != "pack_yongfeng_multilabel"
             for n in tool_names
         )
 
-        # 只有当调用的工具涉及打包带时才检查打包带 VPN；
-        # 镔鑫/盛隆废钢 VPN 由用户自行保证，代码不触碰
-        if any_packing_tool and not self.vpn.check_connectivity():
+        if (any_packing_tool or yongfeng_image_tool) and not self.vpn.check_connectivity():
             session["vpn_state"] = "waiting_code"
             session["pending_query"] = message
             messages.pop()
@@ -666,6 +736,45 @@ class SteelCoilAgent:
                     )
                 args["output_dir"] = dest
                 result = self._tool_download_shenglong_images(
+                    args.get("start_date", ""),
+                    args.get("end_date", ""),
+                    args.get("output_dir"),
+                    args.get("dates"),
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": json.dumps(result, ensure_ascii=False),
+                        "tool_call_id": tool_call.id,
+                    }
+                )
+                continue
+
+            if func_name == "download_yongfeng_images":
+                try:
+                    args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+                dest = str(
+                    args.get("output_dir")
+                    or self._default_yongfeng_output_dir
+                    or self._default_shenglong_output_dir
+                    or ""
+                ).strip()
+                if not dest:
+                    self._yongfeng_pending_args = args
+                    session["vpn_state"] = "waiting_yongfeng_dir"
+                    messages.pop()
+                    return (
+                        "永锋检判原图会立刻写到你的电脑上。请先给出保存路径：\n\n"
+                        "```\n"
+                        "保存地址：/Users/你的用户名/Desktop/永锋图像\n"
+                        "```\n\n"
+                        "也可以先在左侧「图像保存路径」框里填好，再重新发送下载指令。",
+                        session,
+                    )
+                args["output_dir"] = dest
+                result = self._tool_download_yongfeng_images(
                     args.get("start_date", ""),
                     args.get("end_date", ""),
                     args.get("output_dir"),
@@ -751,6 +860,20 @@ class SteelCoilAgent:
 
         if func_name == "pack_shenglong_multilabel":
             return self._tool_pack_shenglong_multilabel(
+                output_dir=args.get("output_dir") or None,
+                dates=args.get("dates"),
+            )
+
+        if func_name == "download_yongfeng_images":
+            return self._tool_download_yongfeng_images(
+                start_date=args.get("start_date", ""),
+                end_date=args.get("end_date", ""),
+                output_dir=args.get("output_dir") or None,
+                dates=args.get("dates"),
+            )
+
+        if func_name == "pack_yongfeng_multilabel":
+            return self._tool_pack_yongfeng_multilabel(
                 output_dir=args.get("output_dir") or None,
                 dates=args.get("dates"),
             )
@@ -1559,6 +1682,104 @@ class SteelCoilAgent:
             return {"summary_text": f"❌ 打包失败: {exc}"}
 
         lines = ["✅ 已按人工筛完后的原图打包「废钢多标签分类数据集」"]
+        for day in result.get("days") or []:
+            if day.get("skipped"):
+                lines.append(f"- {day.get('date')}: 没有可打包的图，已跳过")
+            else:
+                lines.append(f"- {day.get('date')}: {day.get('images')} 张 → {day.get('zip')}")
+        if not result.get("zip_files"):
+            lines.append("没有生成任何压缩包。请确认目录里还有车次图片。")
+        return {
+            "summary_text": "\n".join(lines),
+            "output_dir": result.get("output_dir"),
+            "zip_files": result.get("zip_files") or [],
+        }
+
+    def _tool_download_yongfeng_images(
+        self,
+        start_date: str,
+        end_date: str,
+        output_dir: str = None,
+        dates: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """从永锋 srape-steel 下载智能判级原图，立刻写到本地路径。"""
+        dest = (
+            output_dir
+            or self._default_yongfeng_output_dir
+            or self._default_shenglong_output_dir
+            or ""
+        ).strip()
+        if not dest:
+            return {
+                "summary_text": (
+                    "还缺保存路径。请回复：\n"
+                    "保存地址：/Users/你的用户名/Desktop/永锋图像"
+                )
+            }
+        if not dates and not start_date:
+            return {"summary_text": "请指定日期，格式 YYYY-MM-DD"}
+        if not end_date:
+            end_date = start_date
+        try:
+            result = download_yongfeng_images_by_date_range(
+                start_date,
+                end_date,
+                output_dir=dest,
+                dates=dates,
+            )
+        except Exception as exc:
+            logger.error("永锋检判原图下载失败: %s", exc)
+            return {"summary_text": f"❌ 下载失败: {exc}"}
+
+        zips = result.get("zip_files") or []
+        zip_lines = "\n".join(f"- {p}" for p in zips) if zips else "- （本区间没有可打包的原图）"
+        date_label = "、".join(result.get("dates") or dates or [start_date, end_date])
+        scp_text = result.get("scp_report") or ""
+        text = (
+            f"✅ 永锋检判原图已直接写入本地（srape-steel，不走盛隆）\n"
+            f"日期：{date_label}\n"
+            f"目录：{result.get('output_dir')}\n"
+            f"新下载 {result.get('success', 0)} 张，跳过已有 {result.get('skipped_existing', 0)} 张，"
+            f"失败 {result.get('failed', 0)} 张\n"
+            f"进度日志：{result.get('output_dir')}/download_progress.log\n"
+            f"实例/边缘分割包：\n{zip_lines}\n"
+            f"{scp_text}\n"
+            f"「废钢多标签分类数据集」还没有打。"
+            f"请打开各日期各车次文件夹删掉不合格图，然后发送：确认打包【永锋】废钢多标签分类数据集"
+        )
+        return {
+            "summary_text": text,
+            "output_dir": result.get("output_dir"),
+            "zip_files": zips,
+            "success": result.get("success", 0),
+            "failed": result.get("failed", 0),
+        }
+
+    def _tool_pack_yongfeng_multilabel(
+        self,
+        output_dir: str = None,
+        dates: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        dest = (
+            output_dir
+            or self._default_yongfeng_output_dir
+            or self._default_shenglong_output_dir
+            or ""
+        ).strip()
+        if not dest:
+            return {
+                "summary_text": (
+                    "还缺保存路径。请先在左侧填写「图像保存路径」，或回复：\n"
+                    "保存地址：/Users/你的用户名/Desktop/永锋图像"
+                )
+            }
+        try:
+            result = pack_yongfeng_multilabel_from_disk(dest, dates=dates)
+        except Exception as exc:
+            logger.error("永锋多标签打包失败: %s", exc)
+            return {"summary_text": f"❌ 打包失败: {exc}"}
+
+        lines = ["✅ 已按人工筛完后的原图打包「废钢多标签分类数据集」（永锋）"]
         for day in result.get("days") or []:
             if day.get("skipped"):
                 lines.append(f"- {day.get('date')}: 没有可打包的图，已跳过")

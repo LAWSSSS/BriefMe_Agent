@@ -21,9 +21,25 @@ import gradio as gr
 import httpx
 
 from agent.core import SteelCoilAgent, _parse_save_path
+from agent.image_download_route import (
+    is_ambiguous_multilabel_pack,
+    is_shenglong_image_download,
+    is_shenglong_multilabel_pack,
+    is_yongfeng_image_download,
+    is_yongfeng_multilabel_pack,
+    mentions_both_plants,
+)
 from agent.shenglong.calculator import last_complete_7_days
-from agent.shenglong.downloader import iter_download_images, parse_requested_dates
-from agent.shenglong.packager import pack_multilabel_from_disk
+from agent.shenglong.downloader import (
+    iter_download_images as iter_shenglong_images,
+    parse_requested_dates as parse_shenglong_dates,
+)
+from agent.shenglong.packager import pack_multilabel_from_disk as pack_shenglong_multilabel
+from agent.yongfeng.downloader import (
+    iter_download_images as iter_yongfeng_images,
+    parse_requested_dates as parse_yongfeng_dates,
+)
+from agent.yongfeng.scrap_packager import pack_multilabel_from_disk as pack_yongfeng_multilabel
 from config.settings import settings
 
 logging.basicConfig(
@@ -45,7 +61,7 @@ YONGYOU_ROOT = DOWNLOADS_ROOT / "yongyou"
 # VPN 状态探测
 # =====================================================================
 def _check_packing_vpn() -> bool:
-    """打包带 VPN 是否连通（简单探测业务域名）"""
+    """永锋专网是否连通（探测打包带业务域名，与烧结矿/检判原图同一 VPN）"""
     try:
         return agent.vpn.check_connectivity()
     except Exception:
@@ -97,7 +113,7 @@ def _status_html() -> str:
     sc_ok = _check_scrap_vpn()
     sl_ok = _check_shenglong_vpn()
     yy_ok = _check_yongyou_vpn()
-    pt_badge = _badge("打包带 VPN", pt_ok)
+    pt_badge = _badge("永锋 VPN", pt_ok)
     sc_badge = _badge("镔鑫 VPN", sc_ok)
     sl_badge = _badge("盛隆 VPN", sl_ok)
     yy_badge = _badge("用友 VPN", yy_ok)
@@ -209,7 +225,24 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                 "指定区间准确率报表": "生成 2026-04-01 到 2026-04-07 的烧结矿颗粒度人工筛分 vs 视觉准确率报表",
                 "支持哪些指令": (
                     "请列出你支持的所有功能和典型用法示例。"
-                    "分【打包带钢卷 @ 永锋】【烧结矿颗粒度 @ 永锋】【废钢检判 @ 镔鑫】【球机图像下载 @ 镔鑫】【用友检判统计 @ 镔鑫】【废钢检判 @ 盛隆】六节回答。"
+                    "分【打包带钢卷 @ 永锋】【烧结矿颗粒度 @ 永锋】【检判原图下载 @ 永锋】"
+                    "【废钢检判 @ 镔鑫】【球机图像下载 @ 镔鑫】【用友检判统计 @ 镔鑫】【废钢检判 @ 盛隆】回答。"
+                ),
+            },
+            "检判原图下载": {
+                "下载昨日检判原图": f"下载 {yesterday} 的【永锋】检判原图",
+                "下载近 7 天检判原图": (
+                    f"下载 {sl_week_start} 到 {sl_week_end} 的【永锋】检判原图"
+                ),
+                "指定日期下载": "下载 2026-09-01 的【永锋】检判原图",
+                "指定多个日期下载": (
+                    "下载 2026-08-31、2026-09-01 的【永锋】检判原图"
+                ),
+                "确认打包多标签（全部已筛日期）": (
+                    "确认打包保存目录下已筛完的【永锋】废钢多标签分类数据集"
+                ),
+                "确认打包指定日期多标签": (
+                    "确认打包 2026-09-01 的【永锋】废钢多标签分类数据集"
                 ),
             },
         },
@@ -485,6 +518,7 @@ def build_ui() -> gr.Blocks:
                     '<div class="brand-subtitle">'
                     "一个入口，多钢厂多场景 — 当前已接入："
                     '<span class="proj-chip pt-chip">打包带钢卷 @ 永锋钢铁</span>'
+                    '<span class="proj-chip pt-chip">检判原图 @ 永锋钢铁</span>'
                     '<span class="proj-chip sc-chip">废钢检判 @ 镔鑫钢铁</span>'
                     '<span class="proj-chip sc-chip">球机图像 @ 镔鑫钢铁</span>'
                     '<span class="proj-chip sc-chip">用友检判图 @ 镔鑫</span>'
@@ -576,6 +610,11 @@ def build_ui() -> gr.Blocks:
                     '    <span class="proj-site">永锋钢铁</span>'
                     '  </div>'
                     '  <div class="proj-row">'
+                    '    <span class="proj-tag pt">检判原图下载</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">永锋钢铁</span>'
+                    '  </div>'
+                    '  <div class="proj-row">'
                     '    <span class="proj-tag sc">废钢检判</span>'
                     '    <span class="proj-arrow">→</span>'
                     '    <span class="proj-site">镔鑫钢铁</span>'
@@ -599,8 +638,8 @@ def build_ui() -> gr.Blocks:
                 )
 
                 download_dir = gr.Textbox(
-                    label="图像保存路径（盛隆检判原图必填）",
-                    placeholder="/Users/你的用户名/Desktop/盛隆图像",
+                    label="图像保存路径（盛隆/永锋检判原图必填）",
+                    placeholder="/Users/你的用户名/Desktop/检判原图",
                     lines=1,
                 )
 
@@ -610,11 +649,12 @@ def build_ui() -> gr.Blocks:
                     "- 问**镔鑫废钢**：带【镔鑫】字样\n"
                     "- 问**盛隆废钢**：带【盛隆】字样\n"
                     "- 只说「废钢」不指明时，会反问你是镔鑫还是盛隆\n"
+                    "- 只说「检判原图」不指明时，会反问你是盛隆还是永锋\n"
                     "- **盛隆主表**支持任意周期累积，按钮里改/补日期即可\n"
                     "- **重废归一化主表**会排除人工无任意重废1/2/3的车次\n"
                     "- **镔鑫球机图像**：在指令中写明日期、工号、密码即可\n"
                     "- **用友检判统计**：在指令中写明日期、账号、密码，自动下载图片+生成带图的 Excel\n"
-                    "- **盛隆检判原图**：先填路径再下载；多标签包要人工删图后点「确认打包」\n"
+                    "- **盛隆/永锋检判原图**：先填路径再下载；多标签包要人工删图后点「确认打包」\n"
                     "- 按钮只是填好文字，**回车**发送"
                 )
 
@@ -721,46 +761,30 @@ def build_ui() -> gr.Blocks:
                 return "", history
             return "", history + [{"role": "user", "content": message}]
 
-        def _is_shenglong_multilabel_pack(message: str) -> bool:
-            if "多标签" in message and ("打包" in message or "确认打包" in message):
-                return True
-            return False
-
-        def _is_shenglong_image_download(message: str) -> bool:
-            if _is_shenglong_multilabel_pack(message):
-                return False
-            if "MINIO图像下载" in message or "3000网站图像下载" in message:
-                return True
-            if "检判原图" in message and ("盛隆" in message or "【盛隆】" in message):
-                return True
-            if "盛隆" in message and (
-                "图像下载" in message or "图片下载" in message or "智能判级照片" in message
-            ):
-                return True
-            return False
-
-        def pack_multilabel_handler(message, history, session, save_dir):
+        def pack_multilabel_handler(message, history, session, save_dir, *, yongfeng: bool = False):
             history = _normalize_chat_history(history)
             dest = (save_dir or "").strip() or _parse_save_path(message)
-            dates = parse_requested_dates(message)
+            dates = (parse_yongfeng_dates if yongfeng else parse_shenglong_dates)(message)
+            pack_fn = pack_yongfeng_multilabel if yongfeng else pack_shenglong_multilabel
+            site = "永锋" if yongfeng else "盛隆"
             xlsx, pptx, imgs = _scan_latest_artifacts()
             if not dest:
                 history.append({
                     "role": "assistant",
                     "content": (
                         "请先在左侧填写「图像保存路径」（须与下载时同一目录），"
-                        "再确认打包废钢多标签分类数据集。"
+                        f"再确认打包{site}废钢多标签分类数据集。"
                     ),
                 })
                 yield history, session, xlsx, pptx, imgs, None
                 return
             try:
-                result = pack_multilabel_from_disk(dest, dates=dates or None)
+                result = pack_fn(dest, dates=dates or None)
             except Exception as exc:
                 history.append({"role": "assistant", "content": f"❌ 打包失败: {exc}"})
                 yield history, session, xlsx, pptx, imgs, None
                 return
-            lines = ["✅ 已按人工筛完后的原图打包「废钢多标签分类数据集」"]
+            lines = [f"✅ 已按人工筛完后的原图打包「废钢多标签分类数据集」（{site}）"]
             for day in result.get("days") or []:
                 if day.get("skipped"):
                     lines.append(f"- {day.get('date')}: 没有可打包的图，已跳过")
@@ -773,17 +797,21 @@ def build_ui() -> gr.Blocks:
             history.append({"role": "assistant", "content": "\n".join(lines)})
             yield history, session, xlsx, pptx, imgs, None
 
-        def download_shenglong_handler(message, history, session, save_dir):
+        def download_image_handler(message, history, session, save_dir, *, yongfeng: bool):
             history = _normalize_chat_history(history)
             dest = (save_dir or "").strip() or _parse_save_path(message)
-            dates = parse_requested_dates(message)
+            dates = (parse_yongfeng_dates if yongfeng else parse_shenglong_dates)(message)
+            iter_fn = iter_yongfeng_images if yongfeng else iter_shenglong_images
+            site = "永锋" if yongfeng else "盛隆"
+            source = "srape-steel" if yongfeng else "3000"
+            example = "永锋图像" if yongfeng else "盛隆图像"
             xlsx, pptx, imgs = _scan_latest_artifacts()
             if not dest:
                 history.append({
                     "role": "assistant",
                     "content": (
                         "请先在左侧填写「图像保存路径」，例如 "
-                        "`/Users/你的用户名/Desktop/盛隆图像`，再发送下载指令。"
+                        f"`/Users/你的用户名/Desktop/{example}`，再发送下载指令。"
                         "图会立刻写到这个目录，中断后重新跑同一日期即可续传。"
                     ),
                 })
@@ -793,9 +821,9 @@ def build_ui() -> gr.Blocks:
                 history.append({
                     "role": "assistant",
                     "content": (
-                        "请写明日期。单日：下载 2026-08-01 的【盛隆】检判原图；"
-                        "多日：下载 2026-08-01、2026-08-03 的【盛隆】检判原图；"
-                        "连续区间：下载 2026-08-01 到 2026-08-03 的【盛隆】检判原图。"
+                        f"请写明日期。单日：下载 2026-09-01 的【{site}】检判原图；"
+                        f"多日：下载 2026-08-31、2026-09-01 的【{site}】检判原图；"
+                        f"连续区间：下载 2026-08-31 到 2026-09-01 的【{site}】检判原图。"
                     ),
                 })
                 yield history, session, xlsx, pptx, imgs, None
@@ -803,12 +831,12 @@ def build_ui() -> gr.Blocks:
 
             date_label = "、".join(dates)
             note = ""
-            if "MINIO图像下载" in message:
+            if not yongfeng and "MINIO图像下载" in message:
                 note = "已改为走 3000 业务系统，不再扫描 MinIO 桶。\n"
             history.append({
                 "role": "assistant",
                 "content": (
-                    f"{note}📥 开始从 3000 下载 {date_label} 的智能判级原图\n"
+                    f"{note}📥 开始从 {source} 下载 {date_label} 的【{site}】智能判级原图\n"
                     f"保存目录：{dest}\n"
                     "每下一车就会写到磁盘，可在该目录看进度。"
                 ),
@@ -817,7 +845,7 @@ def build_ui() -> gr.Blocks:
 
             lines = [history[-1]["content"]]
             try:
-                for event in iter_download_images(output_dir=dest, dates=dates):
+                for event in iter_fn(output_dir=dest, dates=dates):
                     if event.get("type") == "done":
                         result = event.get("result") or {}
                         zips = result.get("zip_files") or []
@@ -859,6 +887,7 @@ def build_ui() -> gr.Blocks:
             # history.append({"role": "user", "content": user_message})
             
             agent._default_shenglong_output_dir = (save_dir or "").strip()
+            agent._default_yongfeng_output_dir = (save_dir or "").strip()
             reply, session = agent.chat(user_message, session)
             
             history.append({"role": "assistant", "content": str(reply)})
@@ -879,14 +908,52 @@ def build_ui() -> gr.Blocks:
                         user_message = str(content).strip()
 
             agent._default_shenglong_output_dir = (save_dir or "").strip()
-            if _is_shenglong_multilabel_pack(user_message):
+            agent._default_yongfeng_output_dir = (save_dir or "").strip()
+            if mentions_both_plants(user_message) and (
+                "检判原图" in user_message
+                or "智能判级照片" in user_message
+                or "多标签" in user_message
+            ):
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                history = _normalize_chat_history(history)
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "这句话里同时出现了永锋和盛隆。"
+                        "请分开发送：下载 【永锋】检判原图，或下载 【盛隆】检判原图。"
+                    ),
+                })
+                yield history, session, xlsx, pptx, imgs, None
+            elif is_ambiguous_multilabel_pack(user_message):
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                history = _normalize_chat_history(history)
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "请指明钢厂后再确认打包："
+                        "确认打包【永锋】废钢多标签分类数据集，"
+                        "或确认打包【盛隆】废钢多标签分类数据集。"
+                    ),
+                })
+                yield history, session, xlsx, pptx, imgs, None
+            elif is_yongfeng_multilabel_pack(user_message):
                 for result in pack_multilabel_handler(
-                    user_message, history, session, save_dir
+                    user_message, history, session, save_dir, yongfeng=True
                 ):
                     yield result
-            elif _is_shenglong_image_download(user_message):
-                for result in download_shenglong_handler(
-                    user_message, history, session, save_dir
+            elif is_shenglong_multilabel_pack(user_message):
+                for result in pack_multilabel_handler(
+                    user_message, history, session, save_dir, yongfeng=False
+                ):
+                    yield result
+            elif is_yongfeng_image_download(user_message):
+                for result in download_image_handler(
+                    user_message, history, session, save_dir, yongfeng=True
+                ):
+                    yield result
+            elif is_shenglong_image_download(user_message):
+                for result in download_image_handler(
+                    user_message, history, session, save_dir, yongfeng=False
                 ):
                     yield result
             else:

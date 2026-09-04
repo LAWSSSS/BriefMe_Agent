@@ -120,6 +120,7 @@ def test_origin_urls_prefer_summary_order():
 
 
 def test_auto_pack_skips_multilabel(tmp_path: Path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     img = tmp_path / "keep.jpg"
     img.write_bytes(b"x")
     shares = parse_manual_shares([{"steelType": 1, "avgRate": 0.80}, {"steelType": 11, "avgRate": 0.20}])
@@ -167,7 +168,7 @@ def test_skip_existing_file_logic(tmp_path: Path):
 
 def test_unique_truck_dir_renames_legacy_folder(tmp_path: Path):
     day = tmp_path / "2026-08-27"
-    day.mkdir()
+    day.mkdir(parents=True)
     legacy = day / "桂ND3699_中废(40)、重废1(30)、重废3(20)、厚剪(10)"
     legacy.mkdir()
     (legacy / "old.jpg").write_bytes(b"x")
@@ -178,6 +179,22 @@ def test_unique_truck_dir_renames_legacy_folder(tmp_path: Path):
     assert (resolved / "old.jpg").is_file()
     assert not legacy.exists()
     print("legacy folder rename OK")
+
+
+def test_unique_truck_dir_canonical_without_daily_index(tmp_path: Path):
+    day = tmp_path
+    day.mkdir(parents=True, exist_ok=True)
+    name = "2026-08-27_桂ND3699_中废(40)、重废1(30)、重废3(20)、厚剪(10)"
+    created = _unique_truck_dir(day, name, 3)
+    assert created.name == name
+    indexed = day / f"{name}_3"
+    indexed.mkdir()
+    (indexed / "a.jpg").write_bytes(b"x")
+    resumed = _unique_truck_dir(day, name, 3)
+    assert resumed.name == name
+    assert (resumed / "a.jpg").is_file()
+    assert not indexed.exists()
+    print("canonical folder without _N OK")
 
 
 def test_parse_requested_dates_single_range_and_list():
@@ -222,6 +239,7 @@ if __name__ == "__main__":
         test_auto_pack_skips_multilabel(_P(td) / "auto")
         test_multilabel_pack_uses_remaining_files(_P(td) / "ml")
         test_unique_truck_dir_renames_legacy_folder(_P(td) / "legacy")
+        test_unique_truck_dir_canonical_without_daily_index(_P(td) / "canon")
     test_parse_requested_dates_single_range_and_list()
     test_parse_save_path()
     print("\nAll shenglong download tests PASSED")

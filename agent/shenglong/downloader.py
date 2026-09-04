@@ -145,23 +145,27 @@ def _unique_truck_dir(
     *,
     legacy_name: str = "",
 ) -> Path:
+    """手册规范名 YYYY-MM-DD_车牌_料型(...) 。不加当日序号；旧的 _N 目录续传时改回规范名。"""
     candidate = day_dir / folder_name
+    indexed = day_dir / f"{folder_name}_{daily_index}"
     if candidate.exists():
         return candidate
+    if indexed.exists():
+        try:
+            indexed.rename(candidate)
+            return candidate
+        except OSError:
+            return indexed
     if legacy_name:
-        for old_name, new_path in (
-            (legacy_name, candidate),
-            (f"{legacy_name}_{daily_index}", day_dir / f"{folder_name}_{daily_index}"),
-        ):
+        for old_name in (legacy_name, f"{legacy_name}_{daily_index}"):
             old_path = day_dir / old_name
-            if old_path.is_dir() and not new_path.exists():
+            if old_path.is_dir() and not candidate.exists():
                 try:
-                    old_path.rename(new_path)
-                    return new_path
+                    old_path.rename(candidate)
+                    return candidate
                 except OSError:
                     return old_path
-    alt = day_dir / f"{folder_name}_{daily_index}"
-    return alt
+    return candidate
 
 
 def download_truck_images(
