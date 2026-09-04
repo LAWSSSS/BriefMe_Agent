@@ -117,6 +117,9 @@ def pack_day_datasets(
             continue
         groups[stem].extend(files)
 
+    if not groups:
+        return []
+
     datasets_dir = Path(day_dir) / "datasets"
     datasets_dir.mkdir(parents=True, exist_ok=True)
     for pattern in (f"*{INSTANCE_SUFFIX}.zip", f"*{EDGE_SUFFIX}.zip"):

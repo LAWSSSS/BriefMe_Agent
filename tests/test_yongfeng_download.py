@@ -277,6 +277,17 @@ def test_parse_requested_dates_single_range_and_list():
         "2026-08-31",
         "2026-09-01",
     ]
+    from datetime import date as date_cls
+
+    class _FixedToday(date_cls):
+        @classmethod
+        def today(cls):
+            return date_cls(2026, 8, 27)
+
+    with patch("agent.yongfeng.downloader.date", _FixedToday):
+        assert parse_requested_dates("下载昨天的【永锋】检判原图") == ["2026-08-26"]
+        week = parse_requested_dates("下载近7天的【永锋】检判原图")
+        assert week[0] == "2026-08-20" and week[-1] == "2026-08-26"
     print("parse requested dates OK")
 
 

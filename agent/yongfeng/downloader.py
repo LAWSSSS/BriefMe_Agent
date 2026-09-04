@@ -401,6 +401,16 @@ def expand_date_range(start_date: str, end_date: str) -> list[str]:
     return out
 
 
+def _relative_dates_from_text(text: str) -> list[str]:
+    """手册：近 7 天不含今天；昨天=昨日。仅在文中没有 YYYY-MM-DD 时使用。"""
+    if "近7天" in text or "近 7 天" in text or "近一周" in text:
+        start, end = last_complete_7_days(date.today())
+        return expand_date_range(start, end)
+    if "昨天" in text or "昨日" in text:
+        return [(date.today() - timedelta(days=1)).strftime("%Y-%m-%d")]
+    return []
+
+
 def parse_requested_dates(
     text: str = "",
     *,
@@ -424,6 +434,8 @@ def parse_requested_dates(
             found.update(expand_date_range(start, end))
         for token in _DATE_RE.findall(text):
             found.add(token)
+        if not found:
+            found.update(_relative_dates_from_text(text))
     if not found and start_date:
         found.update(expand_date_range(start_date, end_date or start_date))
     return sorted(found)
@@ -550,12 +562,15 @@ def iter_download_images(
                 "skipped": sync.skipped,
             }
 
-            zips = pack_day_datasets(output_root / cur, pack_trucks)
+            zips = pack_day_datasets(output_root / cur, pack_trucks) if pack_trucks else []
             day.zip_files = [str(p) for p in zips]
             zip_paths.extend(day.zip_files)
-            pack_msg = f"{cur} 已打包 {len(zips)} 个数据集： " + "、".join(
-                Path(p).name for p in zips
-            )
+            if zips:
+                pack_msg = f"{cur} 已打包 {len(zips)} 个数据集： " + "、".join(
+                    Path(p).name for p in zips
+                )
+            else:
+                pack_msg = f"{cur} 无车次可打包，跳过 datasets"
             writer.event(pack_msg, current_date=cur)
             yield {"type": "day_packed", "message": pack_msg, "zips": day.zip_files}
 

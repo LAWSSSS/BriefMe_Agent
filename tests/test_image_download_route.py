@@ -24,12 +24,17 @@ def test_yongfeng_shortcut_hits_and_does_not_steal_packing_tape():
     assert not is_yongfeng_image_download("生成 2026-04-01 到 2026-04-07 的烧结矿颗粒度准确率报表")
     assert not is_yongfeng_image_download("下载 2026-09-01 的【盛隆】检判原图")
     assert not is_yongfeng_image_download("下载检判原图")
+    assert is_yongfeng_image_download("下载永锋 MINIO图像下载 2026-09-01")
+    assert is_yongfeng_image_download("下载永锋 3000网站图像下载 2026-09-01")
+    assert not is_shenglong_image_download("下载永锋 MINIO图像下载 2026-09-01")
+    assert not is_shenglong_image_download("下载永锋 3000网站图像下载 2026-09-01")
 
 
 def test_shenglong_keeps_old_intercept():
     assert is_shenglong_image_download("下载 2026-08-01 的【盛隆】检判原图")
     assert is_shenglong_image_download("3000网站图像下载")
     assert is_shenglong_image_download("MINIO图像下载")
+    assert is_shenglong_image_download("3000网站图像下载 2026-08-01")
     assert not is_shenglong_image_download("下载 2026-09-01 的【永锋】检判原图")
     assert not is_shenglong_image_download("下载检判原图")
 

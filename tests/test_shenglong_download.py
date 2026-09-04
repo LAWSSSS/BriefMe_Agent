@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import sys
 import zipfile
+from datetime import date as date_cls
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -197,6 +199,20 @@ def test_unique_truck_dir_canonical_without_daily_index(tmp_path: Path):
     print("canonical folder without _N OK")
 
 
+def test_unique_truck_dir_collision_keeps_second_truck_separate(tmp_path: Path):
+    day = tmp_path
+    day.mkdir(parents=True, exist_ok=True)
+    name = "2026-08-27_桂ND3699_重废1(80)"
+    first = _unique_truck_dir(day, name, 1)
+    first.mkdir()
+    (first / "a.jpg").write_bytes(b"x")
+    second = _unique_truck_dir(day, name, 2)
+    assert second.name == f"{name}_2"
+    assert second != first
+    assert (first / "a.jpg").is_file()
+    print("collision keeps second truck separate OK")
+
+
 def test_parse_requested_dates_single_range_and_list():
     assert parse_requested_dates("下载 2026-08-01 的【盛隆】检判原图") == ["2026-08-01"]
     assert parse_requested_dates(
@@ -214,6 +230,16 @@ def test_parse_requested_dates_single_range_and_list():
         "2026-08-01",
         "2026-08-03",
     ]
+
+    class _FixedToday(date_cls):
+        @classmethod
+        def today(cls):
+            return date_cls(2026, 8, 27)
+
+    with patch("agent.shenglong.downloader.date", _FixedToday):
+        assert parse_requested_dates("下载昨天的【盛隆】检判原图") == ["2026-08-26"]
+        week = parse_requested_dates("下载近一周的【盛隆】检判原图")
+        assert week[0] == "2026-08-20" and week[-1] == "2026-08-26"
     print("parse requested dates OK")
 
 
@@ -240,6 +266,7 @@ if __name__ == "__main__":
         test_multilabel_pack_uses_remaining_files(_P(td) / "ml")
         test_unique_truck_dir_renames_legacy_folder(_P(td) / "legacy")
         test_unique_truck_dir_canonical_without_daily_index(_P(td) / "canon")
+        test_unique_truck_dir_collision_keeps_second_truck_separate(_P(td) / "collide")
     test_parse_requested_dates_single_range_and_list()
     test_parse_save_path()
     print("\nAll shenglong download tests PASSED")

@@ -1,7 +1,7 @@
 """盛隆 / 永锋检判原图的 Gradio 关键词拦截（不走 LLM）。
 
 必须互斥：永锋只认带「永锋」的检判原图；盛隆只认带「盛隆」的打包。
-不要用「永锋 + 图片下载」去抢打包带异常图。
+「永锋 + MINIO/3000」走永锋 srape-steel。不要用打包带异常图抢检判原图。
 不带厂名的「确认打包多标签」要反问，不要默认盛隆。
 """
 from __future__ import annotations
@@ -43,6 +43,10 @@ def is_ambiguous_multilabel_pack(message: str) -> bool:
     return not _has_yongfeng(message) and not _has_shenglong(message)
 
 
+def _legacy_image_download_shortcut(message: str) -> bool:
+    return "MINIO图像下载" in message or "3000网站图像下载" in message
+
+
 def is_yongfeng_image_download(message: str) -> bool:
     if is_yongfeng_multilabel_pack(message) or mentions_both_plants(message):
         return False
@@ -51,6 +55,11 @@ def is_yongfeng_image_download(message: str) -> bool:
     if not _has_yongfeng(message):
         return False
     if "检判原图" in message or "智能判级照片" in message:
+        return True
+    # 习惯用语：永锋 + MINIO/3000 仍走永锋 srape-steel，绝不进盛隆 3000。
+    if _legacy_image_download_shortcut(message):
+        return True
+    if "图像下载" in message or "图片下载" in message:
         return True
     return False
 
@@ -62,7 +71,10 @@ def is_shenglong_image_download(message: str) -> bool:
         or mentions_both_plants(message)
     ):
         return False
-    if "MINIO图像下载" in message or "3000网站图像下载" in message:
+    # 只带永锋时，MINIO/3000 快捷词不得落到盛隆。
+    if _has_yongfeng(message) and not _has_shenglong(message):
+        return False
+    if _legacy_image_download_shortcut(message):
         return True
     if "检判原图" in message and _has_shenglong(message):
         return True

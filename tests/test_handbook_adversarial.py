@@ -10,10 +10,16 @@ import ast
 import re
 import sys
 import zipfile
-from datetime import date
+from datetime import date as date_cls
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+
+class _FixedToday(date_cls):
+    @classmethod
+    def today(cls):
+        return date_cls(2026, 8, 27)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -89,6 +95,19 @@ def test_new_truck_dir_matches_handbook_not_indexed(tmp_path: Path):
     assert sl_unique(tmp_path, name, 6).name == name
 
 
+def test_same_plate_second_truck_stays_in_own_folder(tmp_path: Path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    name = "2026-09-01_鲁NG8388_重废1(85)、重废2(15)"
+    first = yf_unique(tmp_path, name, 1)
+    first.mkdir()
+    (first / "a.jpg").write_bytes(b"x")
+    yf_second = yf_unique(tmp_path, name, 2)
+    sl_second = sl_unique(tmp_path, name, 2)
+    assert yf_second.name == f"{name}_2"
+    assert sl_second.name == f"{name}_2"
+    assert (first / "a.jpg").is_file()
+
+
 def test_dunhao_does_not_fill_and_range_does():
     dunhao = "下载 2026-08-01、2026-08-03、2026-08-05 的【永锋】检判原图"
     assert yf_dates(dunhao) == ["2026-08-01", "2026-08-03", "2026-08-05"]
@@ -107,15 +126,25 @@ def test_dunhao_does_not_fill_and_range_does():
 
 
 def test_near_7_days_excludes_today_like_handbook():
-    start, end = last_complete_7_days(date(2026, 8, 27))
+    start, end = last_complete_7_days(date_cls(2026, 8, 27))
     assert (start, end) == ("2026-08-20", "2026-08-26")
     assert end != "2026-08-27"
 
 
-def test_yesterday_and_near_week_are_not_expanded_by_intercept_parser():
-    """Gradio 拦截只认 YYYY-MM-DD；「昨天/近7天」不会在拦截层展开。"""
-    assert yf_dates("下载昨天的【永锋】检判原图") == []
-    assert yf_dates("下载近7天的【永锋】检判原图") == []
+def test_yesterday_and_near_week_expand_when_no_ymd():
+    """手册：无 YYYY-MM-DD 时，昨天/近7天由拦截解析展开；近7天不含今天。"""
+    with (
+        patch("agent.yongfeng.downloader.date", _FixedToday),
+        patch("agent.shenglong.downloader.date", _FixedToday),
+    ):
+        assert yf_dates("下载昨天的【永锋】检判原图") == ["2026-08-26"]
+        assert sl_dates("下载昨日的【盛隆】检判原图") == ["2026-08-26"]
+        week = yf_dates("下载近7天的【永锋】检判原图")
+        assert week[0] == "2026-08-20"
+        assert week[-1] == "2026-08-26"
+        assert "2026-08-27" not in week
+        assert sl_dates("下载近一周的【盛隆】检判原图") == week
+        assert yf_dates("下载昨天 2026-09-01 的【永锋】检判原图") == ["2026-09-01"]
 
 
 def test_relative_save_path_rejected_absolute_accepted():
@@ -181,6 +210,12 @@ def test_auto_pack_never_writes_multilabel(tmp_path: Path):
     assert f"{MULTILABEL_NAME}.zip" not in names
     assert any("实例分割数据集.zip" in n for n in names)
     assert any("边缘分割数据集.zip" in n for n in names)
+
+
+def test_empty_day_does_not_create_datasets_dir(tmp_path: Path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    assert pack_day_datasets(tmp_path, []) == []
+    assert not (tmp_path / "datasets").exists()
 
 
 def test_average_type_pack_when_main_second_diff_le_15(tmp_path: Path):
@@ -261,6 +296,8 @@ def test_route_adversaries_handbook_examples():
     assert is_shenglong_image_download("下载 2026-08-26 的【盛隆】检判原图")
     assert is_shenglong_image_download("3000网站图像下载")
     assert is_shenglong_image_download("MINIO图像下载")
+    assert is_yongfeng_image_download("下载永锋 MINIO图像下载 2026-09-01")
+    assert not is_shenglong_image_download("下载永锋 MINIO图像下载 2026-09-01")
     assert not is_yongfeng_image_download("下载昨天打包带的异常图片")
     assert not is_yongfeng_image_download("下载永锋打包带异常图片")
     assert not is_yongfeng_image_download(
@@ -300,7 +337,7 @@ if __name__ == "__main__":
     test_handbook_folder_has_date_plate_materials_no_daily_index()
     test_dunhao_does_not_fill_and_range_does()
     test_near_7_days_excludes_today_like_handbook()
-    test_yesterday_and_near_week_are_not_expanded_by_intercept_parser()
+    test_yesterday_and_near_week_expand_when_no_ymd()
     test_relative_save_path_rejected_absolute_accepted()
     test_empty_output_dir_raises()
     test_origin_skips_render_and_minio_is_not_the_download_api()
@@ -311,6 +348,8 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as td:
         root = _P(td)
         test_new_truck_dir_matches_handbook_not_indexed(root / "dirs")
+        test_same_plate_second_truck_stays_in_own_folder(root / "collide")
+        test_empty_day_does_not_create_datasets_dir(root / "empty")
         test_auto_pack_never_writes_multilabel(root / "ml")
         test_average_type_pack_when_main_second_diff_le_15(root / "avg")
         test_yongfeng_scp_never_targets_shenglong_sl_feigang_or_datasets(root / "scp")
