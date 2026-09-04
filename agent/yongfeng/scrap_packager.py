@@ -1,4 +1,4 @@
-"""把已下载的检判原图打成「只有 images/」的数据集压缩包。"""
+"""把已下载的永锋检判原图打成「只有 images/」的数据集压缩包。"""
 from __future__ import annotations
 
 import logging
@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
-from agent.shenglong.naming import MaterialShare, classify_pack_group
+from agent.yongfeng.scrap_naming import MaterialShare, classify_pack_group
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,6 @@ _DAY_DIR_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def write_images_zip(zip_path: Path, image_files: Sequence[Path]) -> Path:
-    """生成只含 images/ 的 zip；同名文件只收一份。"""
     zip_path = Path(zip_path)
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     unique: dict[str, Path] = {}
@@ -38,7 +37,6 @@ def write_images_zip(zip_path: Path, image_files: Sequence[Path]) -> Path:
 
 
 def collect_reviewed_images(day_dir: Path) -> list[Path]:
-    """收集某日各车次文件夹里还剩的原图（跳过 datasets）。"""
     files: list[Path] = []
     root = Path(day_dir)
     if not root.is_dir():

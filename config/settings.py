@@ -113,12 +113,28 @@ class ShenglongConfig:
 
 @dataclass
 class YongfengScrapConfig(ShenglongConfig):
-    """永锋废钢图片下载配置，与盛隆配置完全分离。"""
+    """永锋废钢图片下载配置，与盛隆配置完全分离。
+
+    详情页智能判级照片 URL：
+      /oss/waste-water-discharg/…?origin=http://10.233.224.206:9000
+    该 origin 是 MinIO HTTP 原图源（下载已走 originImageUrl），不是盛隆
+    sl_feigang 测试机。scp 主机用网页 origin 主机，远端目录用永锋专属路径，
+    禁止写入盛隆 `sl_feigang`。ssh 用户网页未展示，沿用推理机 cisdi；
+    失败只记日志，不中断本地下载。
+    """
 
     base_url: str = "http://vision.lg.china-yongfeng.com/srape-steel"
     employee_id: str = "022232"
     password: str = "0123456"
     cookie_name: str = "satoken"
+
+    remote_host: str = "10.233.224.206"
+    remote_port: int = 22
+    remote_user: str = "cisdi"
+    remote_image_root: str = (
+        "/mnt/data01/embedded/projects/wangyutai/yf_feigang/test_images_full_car"
+    )
+    remote_scp_timeout_sec: int = 1800
 
 
 @dataclass
