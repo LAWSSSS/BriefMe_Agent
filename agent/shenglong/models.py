@@ -332,7 +332,7 @@ class PeriodSummary:
     # Sheet1 识别率区域文案。默认是原有主料型口径；重废归一化主表会覆盖这些文案。
     recognition_section_title: str = "识别率"
     recognition_condition1_label: str = "主料型相同车次数"
-    recognition_condition2_label: str = "其中主料型占比差异\n小于11% 车次数"
+    recognition_condition2_label: str = "其中主料型占比差异\n小于10% 车次数"
     recognition_result_label: str = "综合识别准确率"
     cumulative_recognition_label: str = "累计准确率"
     recognition_match_label: str = "主料识别率"
