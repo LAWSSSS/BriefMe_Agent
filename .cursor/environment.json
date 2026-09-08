@@ -1,0 +1,17 @@
+{
+  "name": "BriefMe Agent",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "app",
+      "command": "./venv/bin/python app.py",
+      "description": "Gradio web UI for BriefMe, served on http://0.0.0.0:7860"
+    }
+  ],
+  "ports": [
+    {
+      "name": "gradio",
+      "port": 7860
+    }
+  ]
+}

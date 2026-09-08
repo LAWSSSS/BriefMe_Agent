@@ -1,0 +1,8 @@
+# Development / test dependencies (not required to run the web app).
+# Runtime deps live in requirements.txt.
+pytest>=8.0
+flake8>=7.0
+# The 用友 (yongyou) scraping module imports playwright at module load time,
+# so it must be present for `pytest tests/` to collect the full suite.
+# Browsers are only needed for live scraping: run `playwright install chromium`.
+playwright>=1.40
