@@ -1,5 +1,5 @@
-"""永锋废钢检判图片下载。"""
+"""永锋钢铁：烧结矿颗粒度报表与废钢检判原图下载彼此独立。
 
-from .downloader import download_images_by_date_range
-
-__all__ = ["download_images_by_date_range"]
+检判原图 CLI：python -m agent.yongfeng.downloader --start --end --output
+烧结矿报表不要占用此 CLI。
+"""

@@ -17,7 +17,7 @@ class YongfengRecord:
         return cls(
             flow_code=str(item.get("flowCode") or ""),
             car_number=str(item.get("carNumber") or ""),
-            station_number=item.get("stationNumber") or 0,
+            station_number=item.get("stationNumber") if item.get("stationNumber") not in (None, "") else 0,
             create_time=str(item.get("createTime") or ""),
             raw=item,
         )
