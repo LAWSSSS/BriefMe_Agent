@@ -537,7 +537,7 @@ def aggregate_period_heavy_normalized(
         recognition_section_title="重废归一化识别率",
         recognition_condition1_label="排除人工无重废后\n主重废类相同车次数",
         recognition_condition2_label=(
-            "重废1/2/3归一化后\n主料型占比差异小于11% 车次数"
+            "重废1/2/3归一化后\n主料型占比差异小于10% 车次数"
         ),
         recognition_result_label="重废归一化准确率",
         cumulative_recognition_label="累计准确率",

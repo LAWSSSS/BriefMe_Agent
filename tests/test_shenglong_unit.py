@@ -368,7 +368,8 @@ def test_excel_with_summary_sheet():
     assert ws.cell(row=3, column=2).value == "周期内有效扣重车次数"
     assert ws.cell(row=3, column=5).value == 3
     assert ws.cell(row=4, column=2).value == "识别率"
-    assert "小于11%" in str(ws.cell(row=6, column=3).value)
+    assert "小于10%" in str(ws.cell(row=6, column=3).value)
+    assert "150kg" in str(ws.cell(row=11, column=2).value)
     assert ws.cell(row=7, column=2).value == 2
     assert ws.cell(row=7, column=3).value == 1
     assert str(ws.cell(row=7, column=4).value).startswith("=IFERROR(")

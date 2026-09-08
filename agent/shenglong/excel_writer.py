@@ -767,7 +767,7 @@ def _write_one_period_block(
     # 行 11：扣重子表头
     _set_summary_cell(
         ws, r + 10, 2,
-        "比值在 0.5~1.5 之间或\n误差绝对值在 151Kg 以内 车次数",
+        "比值在 0.5~1.5 之间或\n误差绝对值在 150kg 以内 车次数",
         fill=SUMMARY_HEADER_FILL,
     )
     _merge_with_style(ws, r + 10, 2, r + 10, 3)
