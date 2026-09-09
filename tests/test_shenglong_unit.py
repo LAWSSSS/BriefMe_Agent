@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -15,6 +16,8 @@ from agent.shenglong.calculator import (
     aggregate_period,
     aggregate_period_heavy_normalized,
     calc_truck,
+    classify_manual_highlight,
+    days_without_manual_highlights,
 )
 from agent.shenglong.dict import (
     EMPTY_TYPES,
@@ -219,6 +222,7 @@ def test_calc():
     assert len(t1.manual_operators) == 3
     assert t1.manual_operators[0].name == "张三"
     assert t1.manual_operators[0].main.steel_type == 1
+    assert t1.manual_highlight is None  # 3 人同主料，占比差 4%
 
     # 不一致
     t2 = calc_truck("2026-04-22", "鲁A-0002", 2, "flow-2",
@@ -233,6 +237,7 @@ def test_calc():
     # 这里 1 个非黑名单 operator → manual_operators 长度 = 1
     assert len(t2.manual_operators) == 1
     assert t2.manual_operators[0].name == "张三"
+    assert t2.manual_highlight == "single"
 
     # 超标剔除
     t3 = calc_truck("2026-04-22", "鲁A-0003", 3, "flow-3",
@@ -243,6 +248,7 @@ def test_calc():
     assert abs(t3.diff_rate - 15.0) < 1e-6
     # 料型一致但差异 15% ≥ 11% → 主料型不正确
     assert t3.main_same is False
+    assert t3.manual_highlight == "single"
 
     print("calc OK")
     print(f"  t1.diff_rate={t1.diff_rate}, t1.weight_ratio={t1.weight_ratio:.3f}")
@@ -1535,6 +1541,151 @@ def test_last_complete_7_days_excludes_today():
     print("last 7 days OK")
 
 
+def _manual_op(name: str, steel_type: Optional[int], rate: float) -> ManualOperator:
+    main = (
+        MaterialRate(steel_type=steel_type, rate=rate)
+        if steel_type is not None
+        else None
+    )
+    mats = (
+        [MaterialRate(steel_type=steel_type, rate=rate)]
+        if steel_type is not None
+        else []
+    )
+    return ManualOperator(name=name, materials=mats, main=main)
+
+
+def test_classify_manual_highlight():
+    assert classify_manual_highlight([]) is None
+    assert classify_manual_highlight([_manual_op("甲", 1, 80.0)]) == "single"
+
+    same_close = [
+        _manual_op("甲", 1, 80.0),
+        _manual_op("乙", 1, 70.0),
+    ]
+    assert classify_manual_highlight(same_close) is None  # 差恰好 10%，不算超过
+
+    same_over = [
+        _manual_op("甲", 1, 80.0),
+        _manual_op("乙", 1, 69.0),
+    ]
+    assert classify_manual_highlight(same_over) == "spread"
+
+    disagree = [
+        _manual_op("甲", 1, 80.0),
+        _manual_op("乙", 11, 70.0),
+    ]
+    assert classify_manual_highlight(disagree) == "disagree"
+
+    missing_main = [
+        _manual_op("甲", 1, 80.0),
+        _manual_op("乙", None, 0.0),
+    ]
+    assert classify_manual_highlight(missing_main) == "disagree"
+
+    three_spread = [
+        _manual_op("甲", 1, 80.0),
+        _manual_op("乙", 1, 78.0),
+        _manual_op("丙", 1, 68.0),
+    ]
+    assert classify_manual_highlight(three_spread) == "spread"
+    print("classify_manual_highlight OK")
+
+
+def _detail_from_ops(ops: list[tuple[str, int, float]]) -> dict:
+    return {
+        "manualCheckResultVO": {
+            "checkDetails": [
+                {
+                    "operatorName": name,
+                    "deduction": 0.10,
+                    "steelPrice": 2800,
+                    "details": [{"steelType": st, "steelRate": rate / 100.0}],
+                }
+                for name, st, rate in ops
+            ]
+        },
+        "totalCheckResult": {
+            "steelTypeRateList": [{"steelType": 1, "steelRate": 0.80}],
+            "totalDeductWeight": 100,
+        },
+    }
+
+
+def test_excel_manual_highlight_and_compare_box():
+    """行高亮三色 + 期间汇总后有排除对比框。"""
+    from openpyxl import load_workbook
+    from agent.shenglong.excel_writer import (
+        FILL_COMPARE,
+        FILL_MANUAL_DISAGREE,
+        FILL_MANUAL_SINGLE,
+        FILL_MANUAL_SPREAD,
+        write_stats_xlsx,
+    )
+
+    cfg = settings.shenglong
+    t_ok = calc_truck(
+        "2026-09-08", "鲁A-OK", 1, "f-ok",
+        _detail_from_ops([("甲", 1, 80.0), ("乙", 1, 78.0), ("丙", 1, 76.0)]),
+        cfg,
+    )
+    t_single = calc_truck(
+        "2026-09-08", "鲁A-ONE", 1, "f-one",
+        _detail_from_ops([("甲", 1, 80.0)]),
+        cfg,
+    )
+    t_red = calc_truck(
+        "2026-09-08", "鲁A-RED", 1, "f-red",
+        _detail_from_ops([("甲", 1, 80.0), ("乙", 11, 70.0)]),
+        cfg,
+    )
+    t_purple = calc_truck(
+        "2026-09-08", "鲁A-PUR", 1, "f-pur",
+        _detail_from_ops([("甲", 1, 80.0), ("乙", 1, 65.0)]),
+        cfg,
+    )
+    assert t_ok.manual_highlight is None
+    assert t_single.manual_highlight == "single"
+    assert t_red.manual_highlight == "disagree"
+    assert t_purple.manual_highlight == "spread"
+
+    day = aggregate_daily("2026-09-08", [t_ok, t_single, t_red, t_purple])
+    kept = days_without_manual_highlights([day])
+    assert kept[0].total_trucks == 1
+    assert kept[0].trucks[0].car_number == "鲁A-OK"
+
+    out = Path("downloads/shenglong/_unit_test/report_manual_highlight.xlsx")
+    write_stats_xlsx([day], out)
+    ws = load_workbook(str(out))["检判统计详情"]
+
+    # 标题 1 + 空行 + 3 行表头 → 数据从第 6 行
+    assert ws.cell(row=6, column=2).value == "鲁A-OK"
+    assert ws.cell(row=6, column=2).fill.fgColor.rgb[-6:] != "FF0000"
+    assert ws.cell(row=7, column=2).value == "鲁A-ONE"
+    assert ws.cell(row=7, column=2).fill.fgColor.rgb[-6:].upper() == FILL_MANUAL_SINGLE.fgColor.rgb[-6:].upper()
+    assert ws.cell(row=8, column=2).value == "鲁A-RED"
+    assert ws.cell(row=8, column=2).fill.fgColor.rgb[-6:].upper() == FILL_MANUAL_DISAGREE.fgColor.rgb[-6:].upper()
+    assert ws.cell(row=9, column=2).value == "鲁A-PUR"
+    assert ws.cell(row=9, column=2).fill.fgColor.rgb[-6:].upper() == FILL_MANUAL_SPREAD.fgColor.rgb[-6:].upper()
+    for date_row in range(6, 10):
+        assert ws.cell(row=date_row, column=1).fill.fill_type is None
+
+    texts = [
+        str(ws.cell(row=r, column=1).value or "")
+        for r in range(1, ws.max_row + 1)
+    ]
+    assert any(t == "期间汇总" for t in texts)
+    assert any(t == "排除人工异常车次后对比" for t in texts)
+    assert any("排除车数：3" in t for t in texts)
+    assert any("剩余车数" in t or "总车数：1" in t for t in texts)
+    compare_rows = [r for r, t in enumerate(texts, start=1) if t == "排除人工异常车次后对比"]
+    assert compare_rows
+    assert ws.cell(row=compare_rows[0], column=1).fill.fgColor.rgb[-6:].upper() == (
+        FILL_COMPARE.fgColor.rgb[-6:].upper()
+    )
+    print("excel manual highlight + compare box OK")
+
+
 if __name__ == "__main__":
     test_dict()
     test_shenglong_record_station_number_list()
@@ -1574,5 +1725,7 @@ if __name__ == "__main__":
     test_tied_main_types_any_match_counts()
     test_deduction_error_under_151kg_is_correct()
     test_last_complete_7_days_excludes_today()
+    test_classify_manual_highlight()
+    test_excel_manual_highlight_and_compare_box()
     
     print("\nAll shenglong unit smoke tests PASSED")

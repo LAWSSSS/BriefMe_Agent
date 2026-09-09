@@ -47,6 +47,7 @@ from agent.shenglong.dict import (
 )
 from agent.shenglong.models import (
     DailyShenglongStats,
+    ManualHighlight,
     ManualOperator,
     MaterialRate,
     TruckStat,
@@ -62,6 +63,9 @@ EXCLUSION_LOG_PATH = Path(__file__).resolve().parents[2] / "deduction_exclusion_
 
 # 主料型正确的差异值上限（%）：料型一致且 |人工占比-AI占比| < 该值 才算主料正确
 MAIN_TYPE_DIFF_TOLERANCE: float = 11.0
+
+# 多人检判时，任意两人「一致主料型」占比差超过该值 → 浅紫高亮
+MANUAL_RATE_SPREAD_THRESHOLD: float = 10.0
 
 
 def _parse_rate_list(raw_list) -> List[MaterialRate]:
@@ -205,6 +209,49 @@ def _aggregate_manual_from_operators(
     return materials, main_entry, deduct, manual_price, final_price
 
 
+def classify_manual_highlight(
+    operators: List[ManualOperator],
+) -> Optional[ManualHighlight]:
+    """按剔除黑名单后的人工人数/主料型，决定行高亮。
+
+    - 0 人：不打标（整车已视为人工缺失）
+    - 1 人：single（浅黄）
+    - 2 人及以上：主料型编码不一致（含有人没有合法主料）→ disagree（红）
+      主料型一致但任意两人该料型占比差 > 10% → spread（浅紫）
+    """
+    n = len(operators)
+    if n == 0:
+        return None
+    if n == 1:
+        return "single"
+
+    main_types: List[Optional[int]] = [
+        op.main.steel_type if op.main is not None else None for op in operators
+    ]
+    if any(st is None for st in main_types) or len(set(main_types)) > 1:
+        return "disagree"
+
+    rates = [float(op.main.rate) for op in operators if op.main is not None]
+    if not rates:
+        return "disagree"
+    if max(rates) - min(rates) > MANUAL_RATE_SPREAD_THRESHOLD:
+        return "spread"
+    return None
+
+
+def days_without_manual_highlights(
+    stats_list: List[DailyShenglongStats],
+) -> List[DailyShenglongStats]:
+    """去掉三类人工异常高亮车次后，按原日期重新装日汇总。"""
+    return [
+        DailyShenglongStats(
+            date=day.date,
+            trucks=[t for t in day.trucks if t.manual_highlight is None],
+        )
+        for day in stats_list
+    ]
+
+
 def _judge_main_type(
     manual_items: List[Tuple[Optional[int], float]],
     ai_items: List[Tuple[Optional[int], float]],
@@ -279,6 +326,7 @@ def calc_truck(
         op for op in all_operators if not is_excluded_operator(op.name)
     ]
     stat.manual_operators = eligible_operators
+    stat.manual_highlight = classify_manual_highlight(eligible_operators)
 
     if not eligible_operators:
         # 全员被排除 → 视为人工缺失
