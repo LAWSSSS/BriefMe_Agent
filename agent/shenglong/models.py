@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from agent.shenglong.dict import get_material_name
 
 logger = logging.getLogger(__name__)
+
+# 人工检判行高亮：仅 1 人 / 多人主料型不一致 / 主料相同但任意两人占比差 > 10%
+ManualHighlight = Literal["single", "disagree", "spread"]
 
 
 # 扣重值若大于此阈值（吨），视为人工录入时单位写成了 kg，自动 / 1000
@@ -190,6 +193,9 @@ class TruckStat:
     deduction_compliant: Optional[bool] = None
     # 单价差异
     price_diff: Optional[float] = None  # |AI - 人工|
+
+    # 人工检判质量：None=无需高亮
+    manual_highlight: Optional[ManualHighlight] = None
 
     def manual_rate_of(self, steel_type: int) -> Optional[float]:
         """查人工 avgResult 中某料型的占比（%），找不到返回 None"""

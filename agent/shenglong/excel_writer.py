@@ -10,8 +10,8 @@
   AG-AO 人工结果详情③单价(元)：3 人 × (姓名|网页单价|计算单价) = 9 列
 
 表头 3 行：大类 / 中类（人工详情区在这里合并了 2 行高度） / 子类
-主料不一致行浅红底色；
-末尾加识别率 R 和扣杂符合率汇总框（红色边框）；
+主料不一致行浅红底色；人工仅 1 人浅黄、多人主料不一致标准红、主料相同但占比差>10% 浅紫；
+末尾加识别率 R / 扣杂符合率汇总框，以及排除上述异常车后的对比框；
 **人工姓名按每辆车实际 manual_operators 填，不同车不同名。**
 
 两种入口：
@@ -22,15 +22,17 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Never
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from agent.shenglong.dict import get_material_name, STEEL_TYPE_PRICE
+from agent.shenglong.calculator import days_without_manual_highlights
 from agent.shenglong.models import (
     DailyShenglongStats,
+    ManualHighlight,
     ManualOperator,
     MaterialRate,
     PeriodSummary,
@@ -49,8 +51,13 @@ RED_BORDER = Border(left=RED_SIDE, right=RED_SIDE, top=RED_SIDE, bottom=RED_SIDE
 FILL_HEADER_L1 = PatternFill("solid", fgColor="D9E1F2")
 FILL_HEADER_L2 = PatternFill("solid", fgColor="E7EEF9")
 FILL_HEADER_L3 = PatternFill("solid", fgColor="F2F5FB")
-FILL_MISMATCH = PatternFill("solid", fgColor="FCE4E4")  # 浅红
+FILL_NONE = PatternFill(fill_type=None)
+FILL_MISMATCH = PatternFill("solid", fgColor="FCE4E4")  # 浅红：AI/人工主料不一致
+FILL_MANUAL_SINGLE = PatternFill("solid", fgColor="FFF2CC")  # 浅黄：仅 1 人检判
+FILL_MANUAL_DISAGREE = PatternFill("solid", fgColor="FF0000")  # 标准红：多人主料型不一致
+FILL_MANUAL_SPREAD = PatternFill("solid", fgColor="E6CCFF")  # 浅紫：主料相同但占比差>10%
 FILL_SUMMARY = PatternFill("solid", fgColor="FFF2CC")  # 浅黄汇总
+FILL_COMPARE = PatternFill("solid", fgColor="E2EFDA")  # 排除异常后对比
 FILL_CUM_TITLE = PatternFill("solid", fgColor="1F4E78")
 FILL_CUM_GROUP = PatternFill("solid", fgColor="5B9BD5")
 FILL_CUM_HEADER = PatternFill("solid", fgColor="D9EAF7")
@@ -316,13 +323,56 @@ def _truck_row_values(truck: TruckStat) -> List[object]:
     return row
 
 
-def _apply_row_style(ws, row_idx: int, mismatch: bool) -> None:
+def _highlight_fill(kind: Optional[ManualHighlight]) -> Optional[PatternFill]:
+    if kind is None:
+        return None
+    if kind == "single":
+        return FILL_MANUAL_SINGLE
+    if kind == "disagree":
+        return FILL_MANUAL_DISAGREE
+    if kind == "spread":
+        return FILL_MANUAL_SPREAD
+    unreachable: Never = kind
+    raise ValueError(f"未知人工高亮类型: {unreachable}")
+
+
+def _row_fill(truck: TruckStat) -> Optional[PatternFill]:
+    """人工异常色优先；否则沿用 AI/人工主料不一致浅红。"""
+    highlighted = _highlight_fill(truck.manual_highlight)
+    if highlighted is not None:
+        return highlighted
+    if truck.main_same is False:
+        return FILL_MISMATCH
+    return None
+
+
+def _clear_date_column_fill(ws, start_row: int, end_row: int) -> None:
+    """日期列（含合并格）始终无填充，避免被行高亮染成一块红/黄/紫。"""
+    for r in range(start_row, end_row + 1):
+        c = ws.cell(row=r, column=1)
+        c.fill = FILL_NONE
+        c.font = Font()
+        c.alignment = CENTER
+        c.border = BORDER
+
+
+def _apply_row_style(ws, row_idx: int, truck: TruckStat) -> None:
+    fill = _row_fill(truck)
+    font = (
+        Font(color="FFFFFF")
+        if truck.manual_highlight == "disagree"
+        else Font()
+    )
     for col in range(1, TOTAL_COLS + 1):
         c = ws.cell(row=row_idx, column=col)
         c.alignment = CENTER
         c.border = BORDER
-        if mismatch:
-            c.fill = FILL_MISMATCH
+        if col == 1:
+            c.fill = FILL_NONE
+            continue
+        if fill is not None:
+            c.fill = fill
+            c.font = font
 
 
 # ======================================================================
@@ -379,8 +429,7 @@ def write_stats_xlsx(
                 vals[0] = ""
             for col_idx, v in enumerate(vals, start=1):
                 ws.cell(row=row, column=col_idx, value=v)
-            mismatch = truck.main_same is False
-            _apply_row_style(ws, row, mismatch)
+            _apply_row_style(ws, row, truck)
             row += 1
 
         if len(day.trucks) > 1:
@@ -389,6 +438,7 @@ def write_stats_xlsx(
                 end_row=row - 1, end_column=1,
             )
         ws.cell(row=day_start, column=1, value=day.date).alignment = CENTER
+        _clear_date_column_fill(ws, day_start, row - 1)
 
     if row > data_start:
         row += 1
@@ -485,8 +535,7 @@ def _write_period_section(
                 vals[0] = ""
             for col_idx, v in enumerate(vals, start=1):
                 ws.cell(row=r, column=col_idx, value=v)
-            mismatch = truck.main_same is False
-            _apply_row_style(ws, r, mismatch)
+            _apply_row_style(ws, r, truck)
             r += 1
         if len(day.trucks) > 1:
             ws.merge_cells(
@@ -494,6 +543,7 @@ def _write_period_section(
                 end_row=r - 1, end_column=1,
             )
         ws.cell(row=day_start, column=1, value=day.date).alignment = CENTER
+        _clear_date_column_fill(ws, day_start, r - 1)
 
     # ---- 期间汇总（5 行：标题 + 4 条统计）----
     if r > data_start:
@@ -996,6 +1046,86 @@ def _write_summary_sheet(ws, periods: List[PeriodSummary]) -> None:
         _write_one_period_block(ws, base_row, idx, p)
 
 
+def _box_metrics(stats_list: List[DailyShenglongStats]) -> dict:
+    """期间汇总框用的计数（与旧口径一致）。"""
+    trucks = [t for s in stats_list for t in s.trucks]
+    judgable = sum(1 for t in trucks if t.main_same is not None)
+    main_match = sum(1 for t in trucks if t.main_name_match is True)
+    main_same = sum(1 for t in trucks if t.main_same is True)
+    main_within_15 = sum(
+        1
+        for t in trucks
+        if t.main_same is not None and t.diff_rate is not None and t.diff_rate <= 15
+    )
+    dd_eval = sum(
+        1
+        for t in trucks
+        if t.deduction_compliant is not None
+        and t.ai_deduct_ton is not None
+        and t.ai_deduct_ton != 0
+    )
+    dd_ok = sum(1 for t in trucks if t.deduction_compliant is True)
+    return {
+        "total_trucks": len(trucks),
+        "judgable": judgable,
+        "main_match": main_match,
+        "main_same": main_same,
+        "main_within_15": main_within_15,
+        "dd_eval": dd_eval,
+        "dd_ok": dd_ok,
+        "match_rate": (main_match / judgable * 100.0) if judgable > 0 else None,
+        "r90": (main_same / judgable * 100.0) if judgable > 0 else None,
+        "r85": (main_within_15 / judgable * 100.0) if judgable > 0 else None,
+        "c": (dd_ok / dd_eval * 100.0) if dd_eval > 0 else None,
+    }
+
+
+def _metric_lines(m: dict, target_r: float, target_c: float) -> List[str]:
+    return [
+        (
+            f"总车数：{m['total_trucks']}    "
+            f"可判定车数：{m['judgable']}    "
+            f"主料一致：{m['main_match']}"
+        ),
+        f"主料识别率 R：{'N/A' if m['match_rate'] is None else f'{m['match_rate']:.2f}%'}",
+        (
+            f"识别准确率90：{'N/A' if m['r90'] is None else f'{m['r90']:.2f}%'}"
+            f" / 识别准确率85：{'N/A' if m['r85'] is None else f'{m['r85']:.2f}%'}"
+            f"  (目标 ≥ {int(target_r * 100)}% / 85%)"
+        ),
+        f"扣杂可评估车数：{m['dd_eval']}    扣杂符合车数：{m['dd_ok']}",
+        (
+            f"扣杂符合率：{'N/A' if m['c'] is None else f'{m['c']:.2f}%'}"
+            f"  (目标 ≥ {int(target_c * 100)}%)"
+        ),
+    ]
+
+
+def _write_merged_box_row(
+    ws,
+    row: int,
+    text: str,
+    fill: PatternFill,
+    *,
+    title: bool = False,
+) -> None:
+    cell = ws.cell(row=row, column=1, value=text)
+    cell.font = Font(bold=True, size=12 if title else 11)
+    ws.merge_cells(
+        start_row=row, start_column=1, end_row=row, end_column=TOTAL_COLS
+    )
+    alignment = (
+        CENTER
+        if title
+        else Alignment(horizontal="left", vertical="center")
+    )
+    for col in range(1, TOTAL_COLS + 1):
+        c = ws.cell(row=row, column=col)
+        c.alignment = alignment
+        c.fill = fill
+        c.border = RED_BORDER
+
+
 def _write_summary_box(
     ws,
     row: int,
@@ -1003,63 +1133,34 @@ def _write_summary_box(
     target_r: float,
     target_c: float,
 ) -> int:
-    """在 Excel 末尾写汇总框；返回下一行号"""
-    total_trucks = sum(s.total_trucks for s in stats_list)
-    judgable = sum(s.judgable_trucks for s in stats_list)
-    main_match = sum(s.main_name_match_count for s in stats_list)
-    main_same = sum(s.main_same_count for s in stats_list)
-    main_within_15 = sum(
-        1
-        for s in stats_list
-        for t in s.trucks
-        if t.main_same is not None and t.diff_rate is not None and t.diff_rate <= 15
-    )
-    dd_eval = sum(s.deduction_evaluable for s in stats_list)
-    dd_ok = sum(s.deduction_compliant_count for s in stats_list)
+    """在 Excel 末尾写汇总框 + 排除人工异常后对比；返回下一行号"""
+    _write_merged_box_row(ws, row, "期间汇总", FILL_SUMMARY, title=True)
+    row += 1
+    for line in _metric_lines(_box_metrics(stats_list), target_r, target_c):
+        _write_merged_box_row(ws, row, line, FILL_SUMMARY)
+        row += 1
 
-    match_rate = (main_match / judgable * 100.0) if judgable > 0 else None
-    r = (main_same / judgable * 100.0) if judgable > 0 else None
-    r15 = (main_within_15 / judgable * 100.0) if judgable > 0 else None
-    c = (dd_ok / dd_eval * 100.0) if dd_eval > 0 else None
-
-    title = "期间汇总"
-    ws.cell(row=row, column=1, value=title).font = Font(bold=True, size=12)
-    ws.merge_cells(
-        start_row=row, start_column=1, end_row=row, end_column=TOTAL_COLS
-    )
-    for col in range(1, TOTAL_COLS + 1):
-        ws.cell(row=row, column=col).alignment = CENTER
-        ws.cell(row=row, column=col).fill = FILL_SUMMARY
-        ws.cell(row=row, column=col).border = RED_BORDER
+    all_trucks = [t for s in stats_list for t in s.trucks]
+    n_single = sum(1 for t in all_trucks if t.manual_highlight == "single")
+    n_disagree = sum(1 for t in all_trucks if t.manual_highlight == "disagree")
+    n_spread = sum(1 for t in all_trucks if t.manual_highlight == "spread")
+    n_excl = n_single + n_disagree + n_spread
+    kept = days_without_manual_highlights(stats_list)
 
     row += 1
-    lines = [
-        f"总车数：{total_trucks}    可判定车数：{judgable}    主料一致：{main_match}",
-        (
-            f"主料识别率 R：{'N/A' if match_rate is None else f'{match_rate:.2f}%'}"
-        ),
-        (
-            f"识别准确率90：{'N/A' if r is None else f'{r:.2f}%'}"
-            f" / 识别准确率85：{'N/A' if r15 is None else f'{r15:.2f}%'}"
-            f"  (目标 ≥ {int(target_r * 100)}% / 85%)"
-        ),
-        f"扣杂可评估车数：{dd_eval}    扣杂符合车数：{dd_ok}",
-        (
-            f"扣杂符合率：{'N/A' if c is None else f'{c:.2f}%'}"
-            f"  (目标 ≥ {int(target_c * 100)}%)"
-        ),
-    ]
-    for line in lines:
-        ws.cell(row=row, column=1, value=line).font = Font(bold=True, size=11)
-        ws.merge_cells(
-            start_row=row, start_column=1, end_row=row, end_column=TOTAL_COLS
-        )
-        for col in range(1, TOTAL_COLS + 1):
-            ws.cell(row=row, column=col).alignment = Alignment(
-                horizontal="left", vertical="center"
-            )
-            ws.cell(row=row, column=col).fill = FILL_SUMMARY
-            ws.cell(row=row, column=col).border = RED_BORDER
+    _write_merged_box_row(
+        ws, row, "排除人工异常车次后对比", FILL_COMPARE, title=True
+    )
+    row += 1
+    compare_head = (
+        f"排除车数：{n_excl}（浅黄仅1人 {n_single} / "
+        f"红主料不一致 {n_disagree} / 浅紫占比差>10% {n_spread}）    "
+        f"高亮：浅黄=仅1人；红=多人主料型不一致；浅紫=主料相同但任意两人占比差>10%"
+    )
+    _write_merged_box_row(ws, row, compare_head, FILL_COMPARE)
+    row += 1
+    for line in _metric_lines(_box_metrics(kept), target_r, target_c):
+        _write_merged_box_row(ws, row, line, FILL_COMPARE)
         row += 1
 
     return row
