@@ -411,11 +411,19 @@ def write_stats_xlsx(
         ws.title = "检判统计详情"
 
     # ============ 检判统计详情（41 列逻辑） ============
-    ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=14)
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=TOTAL_COLS)
-    ws.cell(row=1, column=1).alignment = CENTER
-
-    header_start = 3
+    if period_summary is not None:
+        car_count = sum(len(day.trucks) for day in stats_list)
+        _write_period_banner(
+            ws,
+            1,
+            f"{period_summary.cycle_label} （共 {car_count} 车）",
+        )
+        header_start = 2
+    else:
+        ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=14)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=TOTAL_COLS)
+        ws.cell(row=1, column=1).alignment = CENTER
+        header_start = 3
     data_start = _write_headers(ws, header_start)
 
     row = data_start
@@ -489,6 +497,19 @@ SECTION_TITLE_FILL = PatternFill("solid", fgColor="305496")  # 周期段标题�
 SECTION_TITLE_FONT = Font(bold=True, size=13, color="FFFFFF")
 
 
+def _write_period_banner(ws, row: int, label: str) -> None:
+    """详情表一段的第一行：期次、日期范围、车数。"""
+    cell = ws.cell(row=row, column=1, value=label)
+    cell.font = SECTION_TITLE_FONT
+    cell.alignment = CENTER
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=TOTAL_COLS)
+    for col in range(1, TOTAL_COLS + 1):
+        ws.cell(row=row, column=col).fill = SECTION_TITLE_FILL
+        ws.cell(row=row, column=col).font = SECTION_TITLE_FONT
+        ws.cell(row=row, column=col).alignment = CENTER
+    ws.row_dimensions[row].height = 22
+
+
 def _write_period_section(
     ws,
     start_row: int,
@@ -508,16 +529,8 @@ def _write_period_section(
     """
     r = start_row
 
-    # ---- 周期标题 ----
-    cell = ws.cell(row=r, column=1, value=period_label)
-    cell.font = SECTION_TITLE_FONT
-    cell.alignment = CENTER
-    ws.merge_cells(
-        start_row=r, start_column=1, end_row=r, end_column=TOTAL_COLS
-    )
-    for col in range(1, TOTAL_COLS + 1):
-        ws.cell(row=r, column=col).fill = SECTION_TITLE_FILL
-    ws.row_dimensions[r].height = 22
+    # ---- 周期标题（该段第一行）----
+    _write_period_banner(ws, r, period_label)
     r += 1
 
     # ---- 三级表头 ----
@@ -605,15 +618,17 @@ def write_master_xlsx(
     cum_main_within = 0
     cum_judgable = 0
     cum_dd_ok = 0
+    cum_dd_eval = 0
     for _, p in cycles:
         cum_main_within += p.main_within_10pct_count
         cum_judgable += p.judgable_trucks
         cum_dd_ok += p.deduction_compliant_count
+        cum_dd_eval += p.deduction_evaluable
         p.cumulative_recognition_rate = (
             cum_main_within / cum_judgable if cum_judgable > 0 else None
         )
         p.cumulative_deduction_compliance_rate = (
-            cum_dd_ok / cum_judgable if cum_judgable > 0 else None
+            cum_dd_ok / cum_dd_eval if cum_dd_eval > 0 else None
         )
 
     # ---- 构建工作簿 ----
@@ -633,14 +648,10 @@ def write_master_xlsx(
         target_deduction_compliance_rate=target_deduction_compliance_rate,
     )
 
-    # ============ Sheet3 检判统计详情（多段）============
+    # ============ Sheet3 检判统计详情（多段，第一行即本期总览）============
     ws = wb.create_sheet(title="检判统计详情")
-    ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=14)
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=TOTAL_COLS)
-    ws.cell(row=1, column=1).alignment = CENTER
-    ws.row_dimensions[1].height = 24
 
-    r = 3
+    r = 1
     for idx, (stats_list, period) in enumerate(cycles, start=1):
         car_count = sum(len(d.trucks) for d in stats_list)
         period_label = (
@@ -841,8 +852,8 @@ def _write_one_period_block(
     _paint_range(ws, r + 11, 4, r + 12, 5, SUMMARY_RESULT_FILL)
     _set_summary_cell(ws, r + 11, 6, "第二阶段 ≥80%")
     _set_summary_cell(ws, r + 11, 7, _stage_status(dd_rate, 80.0))
-    _set_summary_cell(ws, r + 12, 6, "第三阶段 ≥92%")
-    _set_summary_cell(ws, r + 12, 7, _stage_status(dd_rate, 92.0))
+    _set_summary_cell(ws, r + 12, 6, "第三阶段 ≥90%")
+    _set_summary_cell(ws, r + 12, 7, _stage_status(dd_rate, 90.0))
 
     # 行 14：价格差异标题
     _set_summary_cell(
@@ -903,11 +914,9 @@ def _write_cumulative_sheet(
 ) -> None:
     """写用户截图式「累计统计」页。
 
-    口径：
+    口径与 Sheet1 相同：
       · 识别率 = 主料正确且差异<11%车次 / 周期内有效检判车次
-      · 扣重符合率 = 扣重符合车次 / 周期内有效检判车次
-    第二个分母刻意与 Sheet1 可见公式保持一致，避免“汇总页”和“概括页”
-    对同一指标出现不同结果。
+      · 扣重符合率 = 扣重符合车次 / 周期内有效扣重车次
     """
     ws.title = "累计统计"
     ws.freeze_panes = "C4"
@@ -920,15 +929,16 @@ def _write_cumulative_sheet(
         "D": 12,
         "E": 13,
         "F": 12,
-        "G": 13,
+        "G": 12,
+        "H": 13,
     }
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
 
     title = "盛隆检判累计统计"
     ws.cell(row=1, column=1, value=title)
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=7)
-    for col in range(1, 8):
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    for col in range(1, 9):
         cell = ws.cell(row=1, column=col)
         cell.fill = FILL_CUM_TITLE
         cell.font = Font(bold=True, size=15, color="FFFFFF")
@@ -950,8 +960,9 @@ def _write_cumulative_sheet(
         (3, 3, "总"),
         (3, 4, "对"),
         (3, 5, "率"),
-        (3, 6, "对"),
-        (3, 7, "率"),
+        (3, 6, "总"),
+        (3, 7, "对"),
+        (3, 8, "率"),
     ]
     for row, col, value in headers:
         cell = ws.cell(row=row, column=col, value=value)
@@ -963,9 +974,9 @@ def _write_cumulative_sheet(
     ws.merge_cells(start_row=2, start_column=1, end_row=3, end_column=1)
     ws.merge_cells(start_row=2, start_column=2, end_row=3, end_column=2)
     ws.merge_cells(start_row=2, start_column=3, end_row=2, end_column=5)
-    ws.merge_cells(start_row=2, start_column=6, end_row=2, end_column=7)
+    ws.merge_cells(start_row=2, start_column=6, end_row=2, end_column=8)
     for row in (2, 3):
-        for col in range(1, 8):
+        for col in range(1, 9):
             ws.cell(row=row, column=col).alignment = CENTER
             ws.cell(row=row, column=col).border = BORDER
 
@@ -978,8 +989,9 @@ def _write_cumulative_sheet(
             p.judgable_trucks,
             p.main_within_10pct_count,
             f"=IFERROR(D{row}/C{row},0)",
+            p.deduction_evaluable,
             p.deduction_compliant_count,
-            f"=IFERROR(F{row}/C{row},0)",
+            f"=IFERROR(G{row}/F{row},0)",
         ]
         for col, value in enumerate(values, start=1):
             cell = ws.cell(row=row, column=col, value=value)
@@ -993,11 +1005,11 @@ def _write_cumulative_sheet(
                     p.judgable_trucks,
                     target_recognition_rate,
                 )
-            elif col == 7:
+            elif col == 8:
                 cell.number_format = "0.00%"
                 cell.fill = _rate_fill(
                     p.deduction_compliant_count,
-                    p.judgable_trucks,
+                    p.deduction_evaluable,
                     target_deduction_compliance_rate,
                 )
         ws.row_dimensions[row].height = 22
@@ -1012,10 +1024,11 @@ def _write_cumulative_sheet(
             f"=SUM(D{data_start}:D{end_row})",
             f"=IFERROR(D{total_row}/C{total_row},0)",
             f"=SUM(F{data_start}:F{end_row})",
-            f"=IFERROR(F{total_row}/C{total_row},0)",
+            f"=SUM(G{data_start}:G{end_row})",
+            f"=IFERROR(G{total_row}/F{total_row},0)",
         ]
     else:
-        total_values = ["Tol", "合计", 0, 0, 0, 0, 0]
+        total_values = ["Tol", "合计", 0, 0, 0, 0, 0, 0]
 
     for col, value in enumerate(total_values, start=1):
         cell = ws.cell(row=total_row, column=col, value=value)
@@ -1023,7 +1036,7 @@ def _write_cumulative_sheet(
         cell.border = BORDER
         cell.fill = FILL_CUM_TOTAL
         cell.font = Font(bold=True, size=11)
-        if col in (5, 7):
+        if col in (5, 8):
             cell.number_format = "0.00%"
     ws.row_dimensions[total_row].height = 24
 
