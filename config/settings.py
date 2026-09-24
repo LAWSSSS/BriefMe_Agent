@@ -108,7 +108,10 @@ class ShenglongConfig:
     remote_image_root: str = (
         "/mnt/data01/embedded/projects/wangyutai/sl_feigang/test_images_full_car"
     )
-    remote_scp_timeout_sec: int = 1800
+    # 硬上限盖住「还在涨、只是慢」的传输。实习生电脑实测一天约 1 小时。
+    # 真正的失败看 remote_scp_stall_sec：远程体积连续不增加。
+    remote_scp_timeout_sec: int = 14400
+    remote_scp_stall_sec: int = 600
 
 
 @dataclass

@@ -4,14 +4,18 @@ from __future__ import annotations
 import logging
 import shlex
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 from config.settings import ShenglongConfig, settings
 
 logger = logging.getLogger(__name__)
+
+# 查询远程体积的间隔。失败不看这个间隔，而看体积是否还在涨。
+SCP_POLL_INTERVAL_SEC = 60.0
 
 
 @dataclass
@@ -46,6 +50,115 @@ def _scp_base(cfg: ShenglongConfig) -> list[str]:
         "-o",
         "ConnectTimeout=15",
     ]
+
+
+def _parse_du_bytes(stdout: str) -> Optional[int]:
+    """从 `du -sb` 输出取出字节数。空输出或非数字返回 None。"""
+    parts = (stdout or "").strip().split()
+    if not parts:
+        return None
+    try:
+        return int(parts[0])
+    except ValueError:
+        return None
+
+
+def _remote_size_command(cfg: ShenglongConfig, remote_path: str) -> list[str]:
+    quoted = shlex.quote(remote_path)
+    script = (
+        f"if [ -e {quoted} ]; then du -sb {quoted} | awk '{{print $1}}'; "
+        f"else echo 0; fi"
+    )
+    return _ssh_base(cfg) + [script]
+
+
+def _query_remote_bytes(cfg: ShenglongConfig, remote_path: str) -> Optional[int]:
+    """远程目录当前字节数。查不到时返回 None，不把它当成体积 0。"""
+    try:
+        probed = subprocess.run(
+            _remote_size_command(cfg, remote_path),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.info("查询远程体积失败 %s: %s", remote_path, exc)
+        return None
+    if probed.returncode != 0:
+        return None
+    return _parse_du_bytes(probed.stdout)
+
+
+def _start_stderr_reader(
+    proc: subprocess.Popen[str],
+) -> tuple[Optional[threading.Thread], list[str]]:
+    chunks: list[str] = []
+    if proc.stderr is None:
+        return None, chunks
+
+    def _drain() -> None:
+        try:
+            chunks.append(proc.stderr.read() or "")
+        except Exception as exc:  # noqa: BLE001
+            chunks.append(str(exc))
+
+    reader = threading.Thread(target=_drain, daemon=True)
+    reader.start()
+    return reader, chunks
+
+
+def _stop_process(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    proc.kill()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        logger.warning("scp 进程结束超时")
+
+
+def _watch_scp(
+    proc: subprocess.Popen[str],
+    cfg: ShenglongConfig,
+    remote_path: str,
+    *,
+    hard_deadline: float,
+    stall_sec: float,
+) -> Optional[str]:
+    """进程退出且返回码为 0 时返回 None。否则返回失败原因。
+
+    体积还在增加就继续等，直到硬上限。连续 stall_sec 秒不增加才算卡死。
+    """
+    reader, stderr_chunks = _start_stderr_reader(proc)
+    last_size: Optional[int] = None
+    last_growth = time.monotonic()
+    reason: Optional[str] = None
+    while proc.poll() is None:
+        now = time.monotonic()
+        if now >= hard_deadline:
+            _stop_process(proc)
+            reason = f"传输仍在进行，但已超过硬上限 {int(cfg.remote_scp_timeout_sec)}s"
+            break
+        size = _query_remote_bytes(cfg, remote_path)
+        if size is not None and (last_size is None or size > last_size):
+            last_size = size
+            last_growth = now
+        elif now - last_growth >= stall_sec:
+            _stop_process(proc)
+            reason = f"远程体积连续 {int(stall_sec)}s 没有增加，已中止"
+            break
+        remaining = min(SCP_POLL_INTERVAL_SEC, max(0.0, hard_deadline - time.monotonic()))
+        if remaining <= 0:
+            continue
+        time.sleep(remaining)
+
+    if reader is not None:
+        reader.join(timeout=5)
+    if reason:
+        return reason
+    if proc.returncode not in (0, None):
+        return "".join(stderr_chunks).strip() or "scp 失败"
+    return None
 
 
 def _truck_dirs(day_dir: Path) -> list[Path]:
@@ -108,8 +221,9 @@ def sync_date_folder(local_day_dir: Path) -> SyncResult:
             remote_path=remote_day,
         )
 
-    timeout = max(1, int(cfg.remote_scp_timeout_sec))
-    deadline = time.monotonic() + timeout
+    hard_sec = max(1, int(cfg.remote_scp_timeout_sec))
+    stall_sec = max(1, int(cfg.remote_scp_stall_sec))
+    hard_deadline = time.monotonic() + hard_sec
     try:
         mkdir = subprocess.run(
             _ssh_base(cfg) + [f"mkdir -p {shlex.quote(remote_day)}"],
@@ -125,20 +239,26 @@ def sync_date_folder(local_day_dir: Path) -> SyncResult:
         errors: list[str] = []
         dest = f"{cfg.remote_user}@{cfg.remote_host}:{remote_day}/"
         for truck in truck_dirs:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                errors.append(f"{truck.name}: scp 超时（>{timeout}s）")
+            if time.monotonic() >= hard_deadline:
+                errors.append(f"{truck.name}: 传输仍在进行，但已超过硬上限 {hard_sec}s")
                 break
-            copied = subprocess.run(
+            remote_truck = f"{remote_day}/{truck.name}"
+            proc = subprocess.Popen(
                 _scp_base(cfg) + [str(truck), dest],
-                capture_output=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=remaining,
             )
-            if copied.returncode != 0:
-                err = (copied.stderr or copied.stdout or "scp 失败").strip()
-                errors.append(f"{truck.name}: {err}")
-                logger.warning("scp 失败 %s/%s: %s", day_dir.name, truck.name, err)
+            reason = _watch_scp(
+                proc,
+                cfg,
+                remote_truck,
+                hard_deadline=hard_deadline,
+                stall_sec=stall_sec,
+            )
+            if reason:
+                errors.append(f"{truck.name}: {reason}")
+                logger.warning("scp 失败 %s/%s: %s", day_dir.name, truck.name, reason)
         if errors:
             return SyncResult(
                 ok=False,
@@ -147,8 +267,8 @@ def sync_date_folder(local_day_dir: Path) -> SyncResult:
                 remote_path=remote_day,
             )
     except subprocess.TimeoutExpired:
-        err = f"scp 超时（>{timeout}s）"
-        logger.warning("scp 超时 %s", day_dir.name)
+        err = f"scp 准备阶段超时（>{hard_sec}s）"
+        logger.warning("scp 准备阶段超时 %s", day_dir.name)
         return SyncResult(ok=False, skipped=False, error=err, remote_path=remote_day)
     except Exception as exc:  # noqa: BLE001
         logger.warning("scp 异常 %s: %s", day_dir.name, exc)
