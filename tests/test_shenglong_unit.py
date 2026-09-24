@@ -376,6 +376,11 @@ def test_excel_with_summary_sheet():
     assert ws.cell(row=4, column=2).value == "识别率"
     assert "小于10%" in str(ws.cell(row=6, column=3).value)
     assert "150kg" in str(ws.cell(row=11, column=2).value)
+    assert ws.cell(row=8, column=6).value == "第三阶段 ≥92%"
+    assert ws.cell(row=13, column=6).value == "第三阶段 ≥90%"
+    assert wb["检判统计详情"].cell(row=1, column=1).value == (
+        "2026.4.22 至 2026.4.23 （共 3 车）"
+    )
     assert ws.cell(row=7, column=2).value == 2
     assert ws.cell(row=7, column=3).value == 1
     assert str(ws.cell(row=7, column=4).value).startswith("=IFERROR(")
@@ -397,8 +402,9 @@ def test_excel_with_summary_sheet():
     assert ws_cum.cell(row=4, column=3).value == period.judgable_trucks
     assert ws_cum.cell(row=4, column=4).value == period.main_within_10pct_count
     assert ws_cum.cell(row=4, column=5).value == "=IFERROR(D4/C4,0)"
-    assert ws_cum.cell(row=4, column=6).value == period.deduction_compliant_count
-    assert ws_cum.cell(row=4, column=7).value == "=IFERROR(F4/C4,0)"
+    assert ws_cum.cell(row=4, column=6).value == period.deduction_evaluable
+    assert ws_cum.cell(row=4, column=7).value == period.deduction_compliant_count
+    assert ws_cum.cell(row=4, column=8).value == "=IFERROR(G4/F4,0)"
     assert ws_cum.cell(row=6, column=1).value == "Tol"
     assert ws_cum.cell(row=6, column=5).value == "=IFERROR(D6/C6,0)"
     print("summary sheet OK")
@@ -789,8 +795,7 @@ def test_master_xlsx_two_cycles_with_auto_prev_chain():
 
     # ---- Sheet2：两段，每段含周期标题 ----
     ws_d = wb["检判统计详情"]
-    # 第 1 行整张表标题
-    assert "盛隆赛迪废钢判级" in str(ws_d.cell(row=1, column=1).value)
+    assert str(ws_d.cell(row=1, column=1).value).startswith("第 1 期")
     # 收集 A 列所有非空文字，应能找到 2 个段标题（"第 N 期 ..."）
     period_titles = []
     for r in range(1, ws_d.max_row + 1):
@@ -866,6 +871,11 @@ def test_master_summary_deduction_uses_evaluable_denominator():
     assert ws.cell(row=3, column=5).value == 52
     assert ws.cell(row=12, column=2).value == 24
     assert ws.cell(row=12, column=4).value == "=IFERROR(B12/E3,0)"
+    assert ws.cell(row=13, column=6).value == "第三阶段 ≥90%"
+    ws_cum = load_workbook(str(out), data_only=False)["累计统计"]
+    assert ws_cum.cell(row=4, column=6).value == 52
+    assert ws_cum.cell(row=4, column=7).value == 24
+    assert ws_cum.cell(row=4, column=8).value == "=IFERROR(G4/F4,0)"
     print("master deduction denom OK")
 
 
@@ -917,6 +927,7 @@ def test_master_xlsx_cumulative_sheet():
         judgable_trucks=44,
         main_within_10pct_count=3,
         deduction_compliant_count=9,
+        deduction_evaluable=40,
     )
     p2 = PeriodSummary(
         cycle_label="2026.4.23 至 2026.4.29",
@@ -925,6 +936,7 @@ def test_master_xlsx_cumulative_sheet():
         judgable_trucks=17,
         main_within_10pct_count=1,
         deduction_compliant_count=5,
+        deduction_evaluable=15,
     )
     p3 = PeriodSummary(
         cycle_label="2026.4.30 至 2026.5.13",
@@ -933,6 +945,7 @@ def test_master_xlsx_cumulative_sheet():
         judgable_trucks=51,
         main_within_10pct_count=4,
         deduction_compliant_count=24,
+        deduction_evaluable=52,
     )
     p4 = PeriodSummary(
         cycle_label="2026.5.14 至 2026.5.20",
@@ -941,6 +954,7 @@ def test_master_xlsx_cumulative_sheet():
         judgable_trucks=43,
         main_within_10pct_count=9,
         deduction_compliant_count=16,
+        deduction_evaluable=40,
     )
 
     out = Path("downloads/shenglong/_unit_test/master_cumulative_sheet.xlsx")
@@ -957,7 +971,9 @@ def test_master_xlsx_cumulative_sheet():
     assert ws.cell(row=4, column=4).value == 3
     assert ws.cell(row=4, column=5).value == "=IFERROR(D4/C4,0)"
     assert ws.cell(row=7, column=1).value == "第4期"
-    assert ws.cell(row=7, column=6).value == 16
+    assert ws.cell(row=7, column=6).value == 40
+    assert ws.cell(row=7, column=7).value == 16
+    assert ws.cell(row=7, column=8).value == "=IFERROR(G7/F7,0)"
 
     # 第 8 行留白，第 9 行 Tol 合计，结构贴近用户截图。
     assert ws.cell(row=9, column=1).value == "Tol"
@@ -965,7 +981,8 @@ def test_master_xlsx_cumulative_sheet():
     assert ws.cell(row=9, column=4).value == "=SUM(D4:D7)"
     assert ws.cell(row=9, column=5).value == "=IFERROR(D9/C9,0)"
     assert ws.cell(row=9, column=6).value == "=SUM(F4:F7)"
-    assert ws.cell(row=9, column=7).value == "=IFERROR(F9/C9,0)"
+    assert ws.cell(row=9, column=7).value == "=SUM(G4:G7)"
+    assert ws.cell(row=9, column=8).value == "=IFERROR(G9/F9,0)"
     print("master cumulative sheet OK")
 
 
@@ -1273,17 +1290,18 @@ def test_heavy_master_tool_generates_distinct_report():
     # Sheet2 的主料型对比列也必须切换为归一化后的重废1/2/3视图：
     # A1 原始人工主料是“厚剪”，但重废归一化后应显示“重废1 60.00”
     ws_d = wb["检判统计详情"]
-    assert ws_d.cell(row=7, column=2).value == "A1"
-    assert ws_d.cell(row=7, column=4).value == "重废1"
-    assert float(ws_d.cell(row=7, column=5).value) == 60.0
-    assert ws_d.cell(row=7, column=6).value == "重废1"
-    assert float(ws_d.cell(row=7, column=7).value) == 60.0
+    assert str(ws_d.cell(row=1, column=1).value).startswith("第 1 期")
+    assert ws_d.cell(row=5, column=2).value == "A1"
+    assert ws_d.cell(row=5, column=4).value == "重废1"
+    assert float(ws_d.cell(row=5, column=5).value) == 60.0
+    assert ws_d.cell(row=5, column=6).value == "重废1"
+    assert float(ws_d.cell(row=5, column=7).value) == 60.0
 
     # A2 人工没有重废1/2/3，不进入准确率统计；Sheet2 对比列显示不可判定
-    assert ws_d.cell(row=8, column=2).value == "A2"
-    assert ws_d.cell(row=8, column=4).value == "--"
-    assert ws_d.cell(row=8, column=5).value == "/"
-    assert ws_d.cell(row=8, column=8).value in (None, "")
+    assert ws_d.cell(row=6, column=2).value == "A2"
+    assert ws_d.cell(row=6, column=4).value == "--"
+    assert ws_d.cell(row=6, column=5).value == "/"
+    assert ws_d.cell(row=6, column=8).value in (None, "")
     print("heavy master tool OK")
 
 
