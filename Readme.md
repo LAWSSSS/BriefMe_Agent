@@ -178,7 +178,7 @@ export DEEPSEEK_API_KEY="<向负责人索取的 DeepSeek API Key>"
 python app.py
 ```
 
-终端输出 Running on local URL: http://0.0.0.0:7860 后，在浏览器中打开该地址即可开始对话。左侧提供快捷指令按钮，点击填入后按回车发送。
+终端输出 Running on local URL: http://127.0.0.1:7860 后，在浏览器中打开该地址即可开始对话。页面只监听本机，不对外分享。左侧提供快捷指令按钮，点击填入后按回车发送。
 
 ## 💻 命令行批量导出模式 (CLI)
 

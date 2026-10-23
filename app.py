@@ -1028,11 +1028,17 @@ def build_ui() -> gr.Blocks:
     return demo
 
 
+# 只监听本机，并禁止 Gradio 公网分享。分享会下载并运行 frpc。
+GRADIO_SERVER_NAME = "127.0.0.1"
+GRADIO_SHARE = False
+
+
 if __name__ == "__main__":
     demo = build_ui()
     demo.launch(
-        server_name="0.0.0.0",
+        server_name=GRADIO_SERVER_NAME,
         server_port=7860,
+        share=GRADIO_SHARE,
         theme=THEME,
         css=CUSTOM_CSS,
     )
