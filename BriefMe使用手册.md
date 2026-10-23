@@ -80,14 +80,16 @@ python app.py
 看到类似输出就成功：
 
 ```text
-Running on local URL: http://0.0.0.0:7860
+Running on local URL: http://127.0.0.1:7860
 ```
 
 浏览器打开：
 
 ```text
-http://localhost:7860
+http://127.0.0.1:7860
 ```
+
+页面只监听本机。同一局域网里的其他电脑打不开这个地址。
 
 关闭服务：
 
