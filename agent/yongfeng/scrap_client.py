@@ -145,8 +145,10 @@ class YongfengScrapClient:
                 "GET",
                 self.cfg.list_endpoint,
                 params={
-                    "current": page,
-                    "size": PAGE_SIZE,
+                    # 这个接口不认 current/size：size 会被忽略成 10，current 翻页不生效。
+                    # 实测 pageIndex + pageSize 才能翻完一天。
+                    "pageIndex": page,
+                    "pageSize": PAGE_SIZE,
                     "startTime": start_time,
                     "endTime": end_time,
                 },
