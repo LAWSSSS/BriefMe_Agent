@@ -27,6 +27,10 @@ from agent.shenglong.packager import pack_multilabel_from_disk
 from agent.yongfeng.downloader import (
     download_images_by_date_range as download_yongfeng_images_by_date_range,
 )
+from agent.yongfeng.scrap_align import (
+    align_manual_file as align_yongfeng_scrap_manual,
+    format_align_summary as format_yongfeng_align_summary,
+)
 from agent.yongfeng.scrap_packager import (
     pack_multilabel_from_disk as pack_yongfeng_multilabel_from_disk,
 )
@@ -153,7 +157,11 @@ def _build_system_prompt() -> str:
         "    该工具必须带上用户指定的本机保存路径 output_dir。"
         "    若用户没给路径，仍先调用工具并把 output_dir 设为空字符串，系统会追问路径。"
         "    未配置 scp 则跳过；scp 失败只在总结里说明，不中断下载。\n"
-        "  - pack_yongfeng_multilabel （人工筛图后，确认打包永锋废钢多标签分类数据集）\n\n"
+        "  - pack_yongfeng_multilabel （人工筛图后，确认打包永锋废钢多标签分类数据集）\n"
+        "  - yongfeng_align_scrap_manual （永锋废钢：本地人工检判表 × 视觉质检实绩对齐）\n"
+        "    以人工表为底账。同一天、同一车牌，且视觉侧已有质检完成记录的，写入扣重扣杂总计"
+        "和扣杂/厚度扣重的重量、占比、说明。对不上的记「未检判」。"
+        "manual_file 用用户给出的 xlsx 绝对路径；没写路径就传空字符串，系统会用界面上选取的文件。\n\n"
         "【镔鑫球机图像下载+重命名】工具（bxsteel_ 前缀）：\n"
         "  - bxsteel_download_images （从镔鑫废钢智能检判系统下载球机原图并重命名，默认下载昨天）\n"
         "    该工具需要用户提供工号和密码。即使当前消息中未提供凭证，"
@@ -165,6 +173,9 @@ def _build_system_prompt() -> str:
         "也请先调用该工具（用空字符串传入 username/password），"
         "系统会自动弹出凭证输入提示。不要自行反问用户。\n\n"
         "判断用户问的是哪个项目，请严格遵守以下【路由铁律】：\n"
+        "例外：用户说【永锋】并且要做【人工检判/人工判定/质检实绩/扣重扣杂】的对齐、对照或筛选\n"
+        "   → 只调用 yongfeng_align_scrap_manual。不要走烧结矿，不要下载检判原图，"
+        "不要反问是镔鑫还是盛隆。\n"
         "1. 用户说【打包带 / 钢卷 / 打数 / 应打数 / 已打数 / 正常 / 异常 / 未识别 / 永锋打包带】\n"
         "   → 必须走【打包带钢卷】工具（无前缀）\n"
         "2. 用户说【镔鑫 / 镔鑫废钢 / 镔鑫钢铁】\n"
@@ -208,6 +219,9 @@ def _build_system_prompt() -> str:
         "盛隆/永锋检判原图「近7天 / 近一周」：区间必须是昨天往前共 7 个自然日"
         "（含昨天、不含今天）。例如今天是 2026-08-27，则 "
         "start_date=2026-08-20、end_date=2026-08-26。不要把今天算进去。\n\n"
+        "=============== 永锋废钢视觉/人工对齐输出格式 ===============\n"
+        "收到 yongfeng_align_scrap_manual 的结果后，直接转述 summary_text，不要改数字。\n"
+        "若有 xlsx_path，单独一行写出文件路径。\n\n"
         "=============== 永锋烧结矿准确率输出格式 ===============\n"
         "收到永锋烧结矿准确率工具返回的数据后，直接输出结果摘要，不要编造数值。\n"
         "若返回 xlsx_path，优先告诉用户报表已生成并给出文件路径。\n\n"
@@ -298,6 +312,7 @@ class SteelCoilAgent:
         self._default_shenglong_output_dir: str = ""
         self._yongfeng_pending_args: Optional[Dict[str, Any]] = None
         self._default_yongfeng_output_dir: str = ""
+        self._default_yongfeng_manual_file: str = ""
 
         if settings.llm.api_key:
             self.client = OpenAICompatClient(
@@ -661,6 +676,7 @@ class SteelCoilAgent:
         # 盛隆图像、永锋检判原图/多标签、镔鑫球机、用友图片不走打包带「视觉 API 配置」校验。
         # 永锋检判原图与打包带同属永锋专网，单独走打包带连通性，避免把烧结/打包带接口 TODO 当成前置条件。
         yongfeng_image_tool = any(n == "download_yongfeng_images" for n in tool_names)
+        yongfeng_align_tool = any(n == "yongfeng_align_scrap_manual" for n in tool_names)
         any_packing_tool = any(
             not n.startswith("scrap_")
             and not n.startswith("shenglong_")
@@ -670,10 +686,11 @@ class SteelCoilAgent:
             and n != "pack_shenglong_multilabel"
             and n != "download_yongfeng_images"
             and n != "pack_yongfeng_multilabel"
+            and n != "yongfeng_align_scrap_manual"
             for n in tool_names
         )
 
-        if (any_packing_tool or yongfeng_image_tool) and not self.vpn.check_connectivity():
+        if (any_packing_tool or yongfeng_image_tool or yongfeng_align_tool) and not self.vpn.check_connectivity():
             session["vpn_state"] = "waiting_code"
             session["pending_query"] = message
             messages.pop()
@@ -878,6 +895,9 @@ class SteelCoilAgent:
                 output_dir=args.get("output_dir") or None,
                 dates=args.get("dates"),
             )
+
+        if func_name == "yongfeng_align_scrap_manual":
+            return self._tool_yongfeng_align_scrap_manual(args)
 
         # =====================================================
         # 废钢工具分支
@@ -1792,6 +1812,30 @@ class SteelCoilAgent:
             "summary_text": "\n".join(lines),
             "output_dir": result.get("output_dir"),
             "zip_files": result.get("zip_files") or [],
+        }
+
+    def _tool_yongfeng_align_scrap_manual(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """用本地人工检判表对齐永锋视觉质检实绩。"""
+        manual_file = str(
+            args.get("manual_file") or self._default_yongfeng_manual_file or ""
+        ).strip()
+        if not manual_file:
+            return {
+                "summary_text": (
+                    "还没有人工检判表。请在左侧「永锋人工检判表」选择 xlsx，"
+                    "或在消息里写上文件绝对路径。"
+                )
+            }
+        output = str(args.get("output") or "").strip() or None
+        try:
+            result = align_yongfeng_scrap_manual(manual_file, output=output)
+        except Exception as exc:
+            logger.error("永锋废钢视觉/人工对齐失败: %s", exc)
+            return {"summary_text": f"对齐失败: {exc}"}
+        return {
+            "summary_text": format_yongfeng_align_summary(result),
+            "xlsx_path": result.get("xlsx_path"),
+            "summary": result.get("summary") or {},
         }
 
     def _tool_yongfeng_export_accuracy_report(self, args: Dict[str, Any]) -> Dict[str, Any]:

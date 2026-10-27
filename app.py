@@ -39,6 +39,13 @@ from agent.yongfeng.downloader import (
     iter_download_images as iter_yongfeng_images,
     parse_requested_dates as parse_yongfeng_dates,
 )
+from agent.yongfeng.scrap_align import (
+    format_align_summary,
+    is_yongfeng_manual_align,
+    iter_align_manual,
+    resolve_manual_path,
+    uploaded_to_path,
+)
 from agent.yongfeng.scrap_packager import pack_multilabel_from_disk as pack_yongfeng_multilabel
 from config.settings import settings
 
@@ -244,6 +251,9 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                 "确认打包指定日期多标签": (
                     "确认打包 2026-09-01 的【永锋】废钢多标签分类数据集"
                 ),
+            },
+            "废钢视觉人工对齐": {
+                "对齐人工检判表": "对齐【永锋】废钢视觉质检实绩和人工检判结果",
             },
         },
         "镔鑫钢铁": {
@@ -615,6 +625,11 @@ def build_ui() -> gr.Blocks:
                     '    <span class="proj-site">永锋钢铁</span>'
                     '  </div>'
                     '  <div class="proj-row">'
+                    '    <span class="proj-tag pt">废钢视觉人工对齐</span>'
+                    '    <span class="proj-arrow">→</span>'
+                    '    <span class="proj-site">永锋钢铁</span>'
+                    '  </div>'
+                    '  <div class="proj-row">'
                     '    <span class="proj-tag sc">废钢检判</span>'
                     '    <span class="proj-arrow">→</span>'
                     '    <span class="proj-site">镔鑫钢铁</span>'
@@ -642,6 +657,11 @@ def build_ui() -> gr.Blocks:
                     placeholder="/Users/你的用户名/Desktop/检判原图",
                     lines=1,
                 )
+                manual_file = gr.File(
+                    label="永锋人工检判表（对齐时选取 xlsx）",
+                    file_types=[".xlsx"],
+                    type="filepath",
+                )
 
                 gr.HTML('<div class="side-title">使用提示</div>')
                 gr.Markdown(
@@ -655,6 +675,7 @@ def build_ui() -> gr.Blocks:
                     "- **镔鑫球机图像**：在指令中写明日期、工号、密码即可\n"
                     "- **用友检判统计**：在指令中写明日期、账号、密码，自动下载图片+生成带图的 Excel\n"
                     "- **盛隆/永锋检判原图**：先填路径再下载；多标签包要人工删图后点「确认打包」\n"
+                    "- **永锋废钢对齐**：先选人工检判 xlsx，再发「对齐【永锋】废钢视觉质检实绩和人工检判结果」\n"
                     "- 按钮只是填好文字，**回车**发送"
                 )
 
@@ -876,6 +897,47 @@ def build_ui() -> gr.Blocks:
                 yield history, session, xlsx, pptx, imgs, None
 
         # ========== 其他功能处理器（普通）==========
+        def align_manual_handler(message, history, session, manual_upload):
+            history = _normalize_chat_history(history)
+            path = resolve_manual_path(message, manual_upload)
+            xlsx, pptx, imgs = _scan_latest_artifacts()
+            if not path or not Path(path).is_file():
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "请先在左侧「永锋人工检判表」选择 xlsx，"
+                        "或在消息里写上文件绝对路径。\n"
+                        "例如：对齐【永锋】废钢视觉质检实绩和人工检判结果 "
+                        "D:\\BriefMe_Agent\\废钢人工判定.xlsx"
+                    ),
+                })
+                yield history, session, xlsx, pptx, imgs, None
+                return
+            history.append({
+                "role": "assistant",
+                "content": (
+                    "开始对齐永锋废钢视觉质检实绩和人工检判表。\n"
+                    f"人工表：{path}\n"
+                    "只取同一天、已经质检完成的车次。对不上的记为未检判。"
+                ),
+            })
+            yield history, session, xlsx, pptx, imgs, None
+            lines = [history[-1]["content"]]
+            try:
+                for event in iter_align_manual(path):
+                    if event.get("type") == "status":
+                        lines.append(str(event.get("message") or ""))
+                    elif event.get("type") == "done":
+                        lines.append(format_align_summary(event.get("result") or {}))
+                    history[-1]["content"] = "\n".join(lines[-60:])
+                    xlsx, pptx, imgs = _scan_latest_artifacts()
+                    yield history, session, xlsx, pptx, imgs, None
+            except Exception as exc:
+                lines.append(f"对齐失败：{exc}\n请确认永锋 VPN 已连接，并且人工表能打开。")
+                history[-1]["content"] = "\n".join(lines[-60:])
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                yield history, session, xlsx, pptx, imgs, None
+
         def normal_handler(user_message, history, session, save_dir):
             history = _normalize_chat_history(history)
             
@@ -895,7 +957,7 @@ def build_ui() -> gr.Blocks:
             return history, session, xlsx, pptx, imgs, None
 
         # ========== 路由处理器 ==========
-        def route_handler(_pending_message, history, session, save_dir):
+        def route_handler(_pending_message, history, session, save_dir, manual_upload):
             user_message = ""
             if history and len(history) > 0:
                 last_item = history[-1]
@@ -909,7 +971,11 @@ def build_ui() -> gr.Blocks:
 
             agent._default_shenglong_output_dir = (save_dir or "").strip()
             agent._default_yongfeng_output_dir = (save_dir or "").strip()
-            if is_dual_plant_image_or_pack_request(user_message):
+            agent._default_yongfeng_manual_file = uploaded_to_path(manual_upload)
+            if is_yongfeng_manual_align(user_message):
+                for result in align_manual_handler(user_message, history, session, manual_upload):
+                    yield result
+            elif is_dual_plant_image_or_pack_request(user_message):
                 xlsx, pptx, imgs = _scan_latest_artifacts()
                 history = _normalize_chat_history(history)
                 history.append({
@@ -975,7 +1041,7 @@ def build_ui() -> gr.Blocks:
             queue=False,
         ).then(
             route_handler,
-            inputs=[msg, chatbot, session, download_dir],
+            inputs=[msg, chatbot, session, download_dir, manual_file],
             outputs=[chatbot, session, report_file, pptx_file, gallery, download_zip_file],
         )
 

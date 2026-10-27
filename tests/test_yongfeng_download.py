@@ -395,7 +395,7 @@ def test_looks_like_image_rejects_html_poison():
     print("image magic OK")
 
 
-def test_query_list_paginates_dedupes_and_skips_pageindex():
+def test_query_list_paginates_with_pageindex():
     pages = {
         1: {
             "data": {
@@ -420,9 +420,10 @@ def test_query_list_paginates_dedupes_and_skips_pageindex():
 
     def fake_request(self, method, endpoint, **kwargs):
         params = kwargs["params"]
-        assert "pageIndex" not in params
-        assert params["size"] == 200
-        return pages[params["current"]]
+        assert params["pageIndex"] in (1, 2)
+        assert params["pageSize"] == 200
+        assert "current" not in params
+        return pages[params["pageIndex"]]
 
     client = YongfengScrapClient.__new__(YongfengScrapClient)
     client.cfg = settings.yongfeng_scrap
@@ -455,7 +456,7 @@ if __name__ == "__main__":
         test_yongfeng_scp_configured_from_site_isolated_from_shenglong(root / "scp")
         test_yongfeng_scp_failure_does_not_raise(root / "scp-fail")
     test_looks_like_image_rejects_html_poison()
-    test_query_list_paginates_dedupes_and_skips_pageindex()
+    test_query_list_paginates_with_pageindex()
     test_parse_requested_dates_single_range_and_list()
     test_parse_save_path()
     test_login_token_falls_back_to_satoken_cookie()
