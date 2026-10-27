@@ -4,10 +4,10 @@
 → 立刻写到用户指定的本地目录。已存在且非空的文件跳过，中断后可续传。
 
 目录：
-    <output>/<YYYY-MM-DD>/<YYYY-MM-DD_车牌_中废(40)、重废1(30)...>/日期_料型_点位_第几辆_第几张.jpg
+    <output>/<YYYY-MM-DD>/<YYYY-MM-DD_车牌_重废Ⅰ>/日期_英文料型_点位_第几辆_第几张.jpg
 
 每个日期下完车次后，可选 scp（失败不中断），再打本地 datasets 压缩包。
-车次文件夹名按手册：YYYY-MM-DD_车牌_料型(...) ，不加当日序号。
+车次文件夹用详情页废钢主料型，不写占比。没有主料型时文件夹记为「无人工」。
 
 CLI：python -m agent.yongfeng.downloader --start YYYY-MM-DD --end YYYY-MM-DD --output DIR
 不要占用烧结矿入口 python -m agent.yongfeng。
@@ -31,7 +31,7 @@ from agent.yongfeng.scrap_naming import (
     build_truck_folder_name,
     build_truck_folder_stem,
     extract_origin_image_urls,
-    parse_manual_shares,
+    main_share_from_detail,
     resolve_station_code,
 )
 from agent.yongfeng.scrap_packager import pack_day_datasets
@@ -301,23 +301,14 @@ def _unique_truck_dir(
     return candidate
 
 
-def _folder_shares(detail: dict) -> list[MaterialShare]:
-    """文件夹/文件名占比：有人工用人工；否则用页面「智能检判结果」（对齐盛隆观感）。"""
-    manual = parse_manual_shares(
-        ((detail.get("manualCheckResultVO") or {}).get("avgResult"))
-    )
-    if manual:
-        return manual
-    tcr = detail.get("totalCheckResult") or {}
-    return parse_manual_shares(tcr.get("steelTypeRateList"))
+def _folder_shares(detail: dict, raw: dict | None = None) -> list[MaterialShare]:
+    """文件夹和文件名只用详情页废钢主料型，不写占比。"""
+    return main_share_from_detail(detail, raw)
 
 
-def _pack_shares(detail: dict, folder_shares: Sequence[MaterialShare]) -> list[MaterialShare]:
-    """打包分组：有人工用人工；现场常无 avgResult 时回退 AI steelTypeRateList。"""
-    if folder_shares:
-        return list(folder_shares)
-    tcr = detail.get("totalCheckResult") or {}
-    return parse_manual_shares(tcr.get("steelTypeRateList"))
+def _pack_shares(_detail: dict, folder_shares: Sequence[MaterialShare]) -> list[MaterialShare]:
+    """打包和文件夹用同一条人工主料型。没有主料型就不进料型包。"""
+    return list(folder_shares)
 
 
 def download_truck_images(
@@ -328,7 +319,7 @@ def download_truck_images(
     output_root: Path,
     daily_index: int,
 ) -> TruckDownloadResult:
-    shares = _folder_shares(detail)
+    shares = _folder_shares(detail, record.raw)
     pack_shares = _pack_shares(detail, shares)
     station = resolve_station_code(record.station_number, detail)
     urls = extract_origin_image_urls(detail)
@@ -494,7 +485,7 @@ def iter_download_images(
                     yield {"type": "progress", "message": msg}
                     continue
 
-                shares = _folder_shares(detail)
+                shares = _folder_shares(detail, rec.raw)
                 urls = extract_origin_image_urls(detail)
                 if not shares and not include_missing_manual:
                     day.skipped_no_manual += 1
@@ -590,9 +581,8 @@ def iter_download_images(
     yield {
         "type": "done",
         "message": (
-            "下载完成。实例/边缘分割包已按主料自动打好。"
-            "「废钢多标签分类数据集」请先按日期、按车次打开文件夹删掉不合格图，"
-            "再在对话里确认打包。"
+            "下载完成。已自动打好「废钢分类数据集」，并按主料型打好实例分割和边缘分割包。"
+            "不再另打「废钢多标签分类数据集」。"
         ),
         "result": summary,
     }

@@ -245,12 +245,6 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                 "指定多个日期下载": (
                     "下载 2026-08-31、2026-09-01 的【永锋】检判原图"
                 ),
-                "确认打包多标签（全部已筛日期）": (
-                    "确认打包保存目录下已筛完的【永锋】废钢多标签分类数据集"
-                ),
-                "确认打包指定日期多标签": (
-                    "确认打包 2026-09-01 的【永锋】废钢多标签分类数据集"
-                ),
             },
             "废钢视觉人工对齐": {
                 "对齐人工检判表": "对齐【永锋】废钢视觉质检实绩和人工检判结果",
@@ -674,7 +668,8 @@ def build_ui() -> gr.Blocks:
                     "- **重废归一化主表**会排除人工无任意重废1/2/3的车次\n"
                     "- **镔鑫球机图像**：在指令中写明日期、工号、密码即可\n"
                     "- **用友检判统计**：在指令中写明日期、账号、密码，自动下载图片+生成带图的 Excel\n"
-                    "- **盛隆/永锋检判原图**：先填路径再下载；多标签包要人工删图后点「确认打包」\n"
+                    "- **盛隆检判原图**：先填路径再下载；多标签包要人工删图后点「确认打包」\n"
+                    "- **永锋检判原图**：先填路径再下载；结束时自动打废钢分类数据集，以及按料型的实例/边缘分割包\n"
                     "- **永锋废钢对齐**：先选人工检判 xlsx，再发「对齐【永锋】废钢视觉质检实绩和人工检判结果」\n"
                     "- 按钮只是填好文字，**回车**发送"
                 )
@@ -872,16 +867,30 @@ def build_ui() -> gr.Blocks:
                         zips = result.get("zip_files") or []
                         zip_text = "\n".join(f"- {p}" for p in zips) if zips else "- 无"
                         scp_text = result.get("scp_report") or ""
+                        if yongfeng:
+                            pack_note = (
+                                "已自动打好「废钢分类数据集」，以及按主料型的实例分割包和边缘分割包。\n"
+                                "永锋不再另打「废钢多标签分类数据集」。"
+                            )
+                        else:
+                            pack_note = (
+                                "「废钢多标签分类数据集」还没打。"
+                                "请按日期、按车次打开文件夹删掉不合格图，"
+                                "再点指令「确认打包多标签」或在对话里说确认打包。"
+                            )
+                        pack_label = (
+                            "废钢分类数据集和按料型的实例/边缘分割包"
+                            if yongfeng
+                            else "实例/边缘分割包"
+                        )
                         lines.append(
                             f"✅ 完成：新下载 {result.get('success', 0)} 张，"
                             f"跳过 {result.get('skipped_existing', 0)} 张，"
                             f"失败 {result.get('failed', 0)} 张\n"
                             f"进度日志：{result.get('output_dir')}/download_progress.log\n"
-                            f"实例/边缘分割包：\n{zip_text}\n"
+                            f"{pack_label}：\n{zip_text}\n"
                             f"{scp_text}\n"
-                            "「废钢多标签分类数据集」还没打。"
-                            "请按日期、按车次打开文件夹删掉不合格图，"
-                            "再点指令「确认打包多标签」或在对话里说确认打包。"
+                            f"{pack_note}"
                         )
                     else:
                         msg_line = event.get("message") or ""
@@ -992,17 +1001,24 @@ def build_ui() -> gr.Blocks:
                 history.append({
                     "role": "assistant",
                     "content": (
-                        "请指明钢厂后再确认打包："
-                        "确认打包【永锋】废钢多标签分类数据集，"
-                        "或确认打包【盛隆】废钢多标签分类数据集。"
+                        "确认打包多标签只用于盛隆。"
+                        "请说：确认打包【盛隆】废钢多标签分类数据集。"
+                        "永锋下载结束时已经自动打好废钢分类数据集，以及按料型的实例/边缘分割包。"
                     ),
                 })
                 yield history, session, xlsx, pptx, imgs, None
             elif is_yongfeng_multilabel_pack(user_message):
-                for result in pack_multilabel_handler(
-                    user_message, history, session, save_dir, yongfeng=True
-                ):
-                    yield result
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                history = _normalize_chat_history(history)
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "永锋不再在人工筛图后另打「废钢多标签分类数据集」。"
+                        "下载结束时会自动生成「废钢分类数据集」，"
+                        "以及每种主料型的实例分割包和边缘分割包。"
+                    ),
+                })
+                yield history, session, xlsx, pptx, imgs, None
             elif is_shenglong_multilabel_pack(user_message):
                 for result in pack_multilabel_handler(
                     user_message, history, session, save_dir, yongfeng=False

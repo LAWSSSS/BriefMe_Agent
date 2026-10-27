@@ -1,11 +1,12 @@
 """永锋检判原图的目录名、文件名、数据集分组。
 
-文件夹（手册：YYYY-MM-DD_车牌_料型(...) ，不加当日序号；
-优先人工 avgResult，否则用智能检判占比）：
-    2026-09-01_鲁NG8388_重废1(85)、重废2(15)
+文件夹按详情页「废钢主料型」命名，不写占比（主料默认 100%）：
+    2026-10-27_鲁Q768TM_统料
+    2026-10-27_鲁Q06362D_统料Ⅰ
 
 单张原图：
-    日期_英文料型占比_点位_第几辆_第几张.jpg
+    日期_英文料型_点位_第几辆_第几张.jpg
+    20261027_tongliao_1_1_3.jpg
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from agent.yongfeng.scrap_dict import (
     filter_main_candidates,
     get_material_en,
     get_material_name,
+    resolve_download_main_type,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,9 +119,16 @@ def parse_manual_shares(avg_result) -> List[MaterialShare]:
     return shares
 
 
+def single_full_main(shares: Sequence[MaterialShare]) -> bool:
+    """人工主料型只有一种，占比按 100% 记，名字里不再写数字。"""
+    return len(shares) == 1 and shares[0].pct_int == 100
+
+
 def format_folder_materials(shares: Sequence[MaterialShare]) -> str:
     if not shares:
         return "无人工"
+    if single_full_main(shares):
+        return shares[0].name_zh
     return "、".join(f"{s.name_zh}({s.pct_int})" for s in shares)
 
 
@@ -165,6 +174,8 @@ def resolve_station_code(station_number, detail: Optional[dict] = None) -> str:
 def format_filename_materials(shares: Sequence[MaterialShare]) -> str:
     if not shares:
         return "unknown_0"
+    if single_full_main(shares):
+        return shares[0].name_en
     return "_".join(f"{s.name_en}_{s.pct_int}" for s in shares)
 
 
@@ -182,12 +193,40 @@ def build_image_filename(
     return f"{date_part}_{mat_part}_{station}_{daily_index}_{image_index}.{suffix}"
 
 
+def share_from_uploaded_main(label: object = None, code: object = None) -> Optional[MaterialShare]:
+    """详情里的废钢主料型 → 一条 100% 占比，供文件夹、文件名和打包使用。"""
+    resolved = resolve_download_main_type(label, code)
+    if resolved is None:
+        return None
+    steel_type, name_zh, name_en = resolved
+    return MaterialShare(
+        steel_type=steel_type,
+        rate_pct=100.0,
+        name_zh=name_zh,
+        name_en=name_en,
+    )
+
+
+def main_share_from_detail(detail: dict, raw: Optional[dict] = None) -> List[MaterialShare]:
+    """只认已上传的废钢主料型，不用智能检判占比。"""
+    deduction = ((detail or {}).get("totalCheckResult") or {}).get("deductionDetail") or {}
+    share = share_from_uploaded_main(
+        deduction.get("declaredSteelTypeName"),
+        deduction.get("declaredSteelTypeCode"),
+    )
+    if share is None and raw:
+        share = share_from_uploaded_main(raw.get("materialName"), raw.get("declaredSteelType"))
+    return [share] if share is not None else []
+
+
 def classify_pack_group(
     shares: Sequence[MaterialShare],
     *,
     avg_diff: float = AVG_TYPE_DIFF_TOLERANCE,
 ) -> Tuple[str, str]:
     """返回 (main|average|none, 压缩包主料型名)。主次料差 ≤15 百分点 → 平均料型。"""
+    if single_full_main(shares):
+        return "main", shares[0].name_zh
     valid = filter_main_candidates([(s.steel_type, s.rate_pct) for s in shares])
     if not valid:
         return "none", ""
