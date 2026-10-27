@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 INSTANCE_SUFFIX = "实例分割数据集"
 EDGE_SUFFIX = "边缘分割数据集"
+CLASSIFICATION_NAME = "废钢分类数据集"
 MULTILABEL_NAME = "废钢多标签分类数据集"
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 _DAY_DIR_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -104,20 +105,24 @@ def pack_day_datasets(
     day_dir: Path,
     trucks: Iterable[dict],
 ) -> list[Path]:
-    """一天下完后：只打主料/平均料型的实例+边缘包。多标签包等人工筛图后再打。"""
+    """一天下完后打两类包：按主料型的实例/边缘分割包，以及不分料型的废钢分类数据集。"""
     groups: dict[str, list[Path]] = defaultdict(list)
+    all_files: list[Path] = []
     for truck in trucks:
-        files = [Path(p) for p in (truck.get("files") or [])]
-        files = [p for p in files if p.is_file() and p.stat().st_size > 0]
+        files = [
+            Path(raw_path)
+            for raw_path in (truck.get("files") or [])
+            if Path(raw_path).is_file() and Path(raw_path).stat().st_size > 0
+        ]
         if not files:
             continue
+        all_files.extend(files)
         shares: Sequence[MaterialShare] = truck.get("shares") or []
         kind, stem = classify_pack_group(shares)
         if kind == "none" or not stem:
             continue
         groups[stem].extend(files)
-
-    if not groups:
+    if not all_files:
         return []
 
     datasets_dir = Path(day_dir) / "datasets"
@@ -125,10 +130,10 @@ def pack_day_datasets(
     for pattern in (f"*{INSTANCE_SUFFIX}.zip", f"*{EDGE_SUFFIX}.zip"):
         for stale in datasets_dir.glob(pattern):
             stale.unlink(missing_ok=True)
-    created: list[Path] = []
+    created: list[Path] = [
+        write_images_zip(datasets_dir / f"{CLASSIFICATION_NAME}.zip", all_files)
+    ]
     for stem, files in groups.items():
         for suffix in (INSTANCE_SUFFIX, EDGE_SUFFIX):
-            created.append(
-                write_images_zip(datasets_dir / f"{stem}_{suffix}.zip", files)
-            )
+            created.append(write_images_zip(datasets_dir / f"{stem}_{suffix}.zip", files))
     return created

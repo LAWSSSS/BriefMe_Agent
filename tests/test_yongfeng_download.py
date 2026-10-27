@@ -31,6 +31,7 @@ from agent.yongfeng.downloader import (
 )
 from agent.yongfeng.scrap_client import YongfengScrapClient, _token_from_login
 from agent.yongfeng.scrap_packager import (
+    CLASSIFICATION_NAME,
     MULTILABEL_NAME,
     pack_day_datasets,
     pack_multilabel_from_disk,
@@ -130,16 +131,31 @@ def test_origin_urls_prefer_summary_skip_render():
 
 def test_auto_pack_skips_multilabel(tmp_path: Path):
     tmp_path.mkdir(parents=True, exist_ok=True)
-    img = tmp_path / "keep.jpg"
-    img.write_bytes(b"x")
     shares = parse_manual_shares(
         [{"steelType": 1, "avgRate": 0.80}, {"steelType": 11, "avgRate": 0.20}]
     )
-    zips = pack_day_datasets(tmp_path, [{"files": [img], "shares": shares}])
+    heavy = tmp_path / "heavy.jpg"
+    mixed = tmp_path / "mixed.jpg"
+    heavy.write_bytes(b"h")
+    mixed.write_bytes(b"m")
+    zips = pack_day_datasets(
+        tmp_path,
+        [
+            {"files": [heavy], "shares": shares},
+            {"files": [mixed], "shares": []},
+        ],
+    )
     names = {p.name for p in zips}
+    assert f"{CLASSIFICATION_NAME}.zip" in names
+    assert "重废1_实例分割数据集.zip" in names
+    assert "重废1_边缘分割数据集.zip" in names
     assert f"{MULTILABEL_NAME}.zip" not in names
-    assert any("实例分割数据集.zip" in n for n in names)
-    print("auto pack skips multilabel OK")
+    by_name = {p.name: p for p in zips}
+    with zipfile.ZipFile(by_name[f"{CLASSIFICATION_NAME}.zip"]) as zf:
+        assert sorted(zf.namelist()) == ["images/heavy.jpg", "images/mixed.jpg"]
+    with zipfile.ZipFile(by_name["重废1_实例分割数据集.zip"]) as zf:
+        assert zf.namelist() == ["images/heavy.jpg"]
+    print("auto pack classification plus typed instance/edge OK")
 
 
 def test_multilabel_pack_uses_remaining_files(tmp_path: Path):
@@ -184,20 +200,49 @@ def test_unique_truck_dir_renames_legacy_folder(tmp_path: Path):
     print("legacy folder rename OK")
 
 
-def test_folder_shares_fallback_to_ai_like_shenglong():
+def test_folder_shares_use_uploaded_main_type_without_percent():
     detail = {
-        "manualCheckResultVO": {},
         "totalCheckResult": {
             "steelTypeRateList": [
                 {"steelType": 1, "steelRate": 0.848},
                 {"steelType": 2, "steelRate": 0.1518},
-            ]
-        },
+            ],
+            "deductionDetail": {
+                "declaredSteelTypeName": "统料1",
+                "declaredSteelTypeCode": 5,
+            },
+        }
     }
     shares = _folder_shares(detail)
-    folder = build_truck_folder_name("鲁NG8388", shares, "2026-09-01")
-    assert folder == "2026-09-01_鲁NG8388_重废1(85)、重废2(15)"
-    print("AI folder shares OK")
+    assert build_truck_folder_name("鲁Q06362D", shares, "2026-10-27") == (
+        "2026-10-27_鲁Q06362D_统料Ⅰ"
+    )
+    assert build_image_filename("2026-10-27", "1", 2, shares, 3) == (
+        "20261027_tongliao1_1_2_3.jpg"
+    )
+    assert _folder_shares(
+        {"totalCheckResult": {"deductionDetail": {"declaredSteelTypeName": "重废1"}}}
+    )[0].name_en == "zhongfei1"
+    assert _folder_shares(
+        {"totalCheckResult": {"deductionDetail": {"declaredSteelTypeName": "重废2"}}}
+    )[0].name_zh == "重废Ⅱ"
+    assert _folder_shares(
+        {"totalCheckResult": {"deductionDetail": {"declaredSteelTypeName": "重废3"}}}
+    )[0].name_zh == "重废Ⅲ"
+    assert _folder_shares(
+        {"totalCheckResult": {"deductionDetail": {"declaredSteelTypeCode": 4}}}
+    )[0].name_en == "tongliao"
+    assert _folder_shares(
+        {"totalCheckResult": {"deductionDetail": {"declaredSteelTypeName": "统料2"}}}
+    )[0].name_en == "tongliao2"
+    assert _folder_shares(
+        {},
+        {"materialName": "外购废钢（统料Ⅰ）"},
+    )[0].name_zh == "统料Ⅰ"
+    assert _folder_shares(
+        {"totalCheckResult": {"steelTypeRateList": [{"steelType": 1, "steelRate": 0.9}]}}
+    ) == []
+    print("uploaded main type naming OK")
 
 
 def test_unique_truck_dir_prefers_plain_and_resumes_indexed(tmp_path: Path):
@@ -440,7 +485,7 @@ if __name__ == "__main__":
 
     test_material_en_codes()
     test_folder_and_filename_match_convention()
-    test_folder_shares_fallback_to_ai_like_shenglong()
+    test_folder_shares_use_uploaded_main_type_without_percent()
     test_classify_pack_group_average_and_main()
     test_station_uses_last_number()
     test_origin_urls_prefer_summary_skip_render()

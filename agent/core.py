@@ -31,9 +31,6 @@ from agent.yongfeng.scrap_align import (
     align_manual_file as align_yongfeng_scrap_manual,
     format_align_summary as format_yongfeng_align_summary,
 )
-from agent.yongfeng.scrap_packager import (
-    pack_multilabel_from_disk as pack_yongfeng_multilabel_from_disk,
-)
 from agent.tools import TOOLS
 from agent.vpn_manager import VPNManager
 from config.settings import settings
@@ -153,11 +150,13 @@ def _build_system_prompt() -> str:
         "    该工具由 GLM function calling 触发；只要用户明确说【生成/导出/统计 永锋烧结矿颗粒度准确率报表】，"
         "    就应优先选择此工具。不要和下文【永锋检判原图】混淆。\n\n"
         "【永锋检判原图下载】工具：\n"
-        "  - download_yongfeng_images （从永锋 srape-steel 下载智能判级原图并按车次命名/打包）\n"
+        "  - download_yongfeng_images （从永锋 srape-steel 下载智能判级原图。"
+        "文件夹和文件名用废钢主料型，不写占比）\n"
         "    该工具必须带上用户指定的本机保存路径 output_dir。"
         "    若用户没给路径，仍先调用工具并把 output_dir 设为空字符串，系统会追问路径。"
         "    未配置 scp 则跳过；scp 失败只在总结里说明，不中断下载。\n"
-        "  - pack_yongfeng_multilabel （人工筛图后，确认打包永锋废钢多标签分类数据集）\n"
+        "    下载结束自动打「废钢分类数据集」，以及按主料型的实例分割包和边缘分割包。"
+        "不要再调用人工筛图后的多标签打包，永锋没有这一步。\n"
         "  - yongfeng_align_scrap_manual （永锋废钢：本地人工检判表 × 视觉质检实绩对齐）\n"
         "    以人工表为底账。同一天、同一车牌，且视觉侧已有质检完成记录的，写入扣重扣杂总计"
         "和扣杂/厚度扣重的重量、占比、说明。对不上的记「未检判」。"
@@ -209,7 +208,8 @@ def _build_system_prompt() -> str:
         "   → 走 download_yongfeng_images。只走永锋 srape-steel，不要走盛隆 3000、不要走烧结矿报表。\n"
         "   必须带上保存路径；没有路径时 output_dir 传空字符串。\n"
         "   单日 / A 到 B / 顿号多日规则与盛隆相同。未配置 scp 则跳过。\n"
-        "   下载完成后不要自动打多标签。等用户确认后再调用 pack_yongfeng_multilabel。\n"
+        "   下载结束会自动打废钢分类数据集，以及按料型的实例分割包和边缘分割包。"
+        "用户说确认打包永锋多标签时，告诉他这一步已取消，不要调用打包工具。\n"
         "12. 用户只说【检判原图】而未指明盛隆或永锋\n"
         "   → 必须反问：『请问是【盛隆检判原图】还是【永锋检判原图】？两个钢厂数据独立。』\n"
         "路由错误会引发严重现场事故，请严格遵守。\n\n"
@@ -685,7 +685,6 @@ class SteelCoilAgent:
             and n != "download_shenglong_images"
             and n != "pack_shenglong_multilabel"
             and n != "download_yongfeng_images"
-            and n != "pack_yongfeng_multilabel"
             and n != "yongfeng_align_scrap_manual"
             for n in tool_names
         )
@@ -886,12 +885,6 @@ class SteelCoilAgent:
             return self._tool_download_yongfeng_images(
                 start_date=args.get("start_date", ""),
                 end_date=args.get("end_date", ""),
-                output_dir=args.get("output_dir") or None,
-                dates=args.get("dates"),
-            )
-
-        if func_name == "pack_yongfeng_multilabel":
-            return self._tool_pack_yongfeng_multilabel(
                 output_dir=args.get("output_dir") or None,
                 dates=args.get("dates"),
             )
@@ -1763,10 +1756,8 @@ class SteelCoilAgent:
             f"新下载 {result.get('success', 0)} 张，跳过已有 {result.get('skipped_existing', 0)} 张，"
             f"失败 {result.get('failed', 0)} 张\n"
             f"进度日志：{result.get('output_dir')}/download_progress.log\n"
-            f"实例/边缘分割包：\n{zip_lines}\n"
-            f"{scp_text}\n"
-            f"「废钢多标签分类数据集」还没有打。"
-            f"请打开各日期各车次文件夹删掉不合格图，然后发送：确认打包【永锋】废钢多标签分类数据集"
+            f"废钢分类数据集，以及按主料型的实例/边缘分割包：\n{zip_lines}\n"
+            f"{scp_text}"
         )
         return {
             "summary_text": text,
@@ -1774,44 +1765,6 @@ class SteelCoilAgent:
             "zip_files": zips,
             "success": result.get("success", 0),
             "failed": result.get("failed", 0),
-        }
-
-    def _tool_pack_yongfeng_multilabel(
-        self,
-        output_dir: str = None,
-        dates: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        dest = (
-            output_dir
-            or self._default_yongfeng_output_dir
-            or self._default_shenglong_output_dir
-            or ""
-        ).strip()
-        if not dest:
-            return {
-                "summary_text": (
-                    "还缺保存路径。请先在左侧填写「图像保存路径」，或回复：\n"
-                    "保存地址：/Users/你的用户名/Desktop/永锋图像"
-                )
-            }
-        try:
-            result = pack_yongfeng_multilabel_from_disk(dest, dates=dates)
-        except Exception as exc:
-            logger.error("永锋多标签打包失败: %s", exc)
-            return {"summary_text": f"❌ 打包失败: {exc}"}
-
-        lines = ["✅ 已按人工筛完后的原图打包「废钢多标签分类数据集」（永锋）"]
-        for day in result.get("days") or []:
-            if day.get("skipped"):
-                lines.append(f"- {day.get('date')}: 没有可打包的图，已跳过")
-            else:
-                lines.append(f"- {day.get('date')}: {day.get('images')} 张 → {day.get('zip')}")
-        if not result.get("zip_files"):
-            lines.append("没有生成任何压缩包。请确认目录里还有车次图片。")
-        return {
-            "summary_text": "\n".join(lines),
-            "output_dir": result.get("output_dir"),
-            "zip_files": result.get("zip_files") or [],
         }
 
     def _tool_yongfeng_align_scrap_manual(self, args: Dict[str, Any]) -> Dict[str, Any]:
