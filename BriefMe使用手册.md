@@ -114,6 +114,7 @@ Ctrl+C
 | 【盛隆】重废归一化主表（排除无重废车次） | 生成盛隆新准确率口径主表 |
 | 下载昨日/近 7 天/指定日期【永锋】检判原图 | 从 srape-steel 按日按车下载智能判级原图（先填保存路径） |
 | 确认打包【永锋】多标签数据集 | 人工删完不合格图后再打永锋「废钢多标签分类数据集」 |
+| 上传指定日期【永锋】数据集 | 把 `<日期>/datasets/` 的 zip 上传到金睛平台永锋数据集（无标注导入） |
 | 下载昨日/近 7 天/指定日期【盛隆】检判原图 | 从 3000 按日按车下载智能判级原图（先填保存路径） |
 | 确认打包【盛隆】多标签数据集 | 人工删完不合格图后再打「废钢多标签分类数据集」 |
 | 昨日打包带情况 | 生成永锋打包带文本汇总 |
@@ -159,7 +160,29 @@ Ctrl+C
 - 顿号枚举不补中间天；「A 到 B」才连续。无具体日期时，「昨天/昨日」「近 7 天/近一周」按手册展开（近 7 天不含今天）。
 - 车次文件夹：`YYYY-MM-DD_车牌_重废1(85)、重废2(15)`。默不加当日序号；仅第二辆同车牌同料型用 `_N`。
 - scp 到 `cisdi@10.233.224.206:.../yf_feigang/test_images_full_car/<日期>/`，不拷 `datasets/`，禁止写入 `sl_feigang`。失败不中断下载。
-- 实例/边缘包自动打；多标签必须人工筛图后确认。0 车不建空 `datasets/`。
+- 自动打「废钢分类数据集」并复制为「废钢杂质数据集」；实例/边缘包按主料型打。多标签须人工筛图后确认。0 车不建空 `datasets/`。
+
+### 3.1.2 永锋钢铁 · 数据集上传
+
+把下载产物 `<保存路径>/<日期>/datasets/` 里的 zip 上传到赛信金睛视觉AI开发平台
+（`pre-athena-mv.cisdigital.cn`）的永锋系列数据集（「永锋-」前缀 +「永锋废钢杂质分割」）。
+**由单独的上传指令触发**，下载结束不会自动上传。保存路径与下载时同一目录（左侧「图像保存路径」）。
+
+```text
+上传 2026-09-01 的【永锋】数据集
+上传 2026-08-31、2026-09-01 的【永锋】数据集
+上传 2026-08-01到2026-10-27 的【永锋】数据集
+```
+
+- zip 按前缀匹配数据集：`重废1_*.zip → 永锋-重废1`、`废钢分类数据集.zip → 永锋-废钢分类`、`废钢杂质数据集.zip → 永锋废钢杂质分割`（固定 id=28392），以此类推；全角罗马数字 `Ⅰ/Ⅱ/Ⅲ` 会归一成 `1/2/3`。
+- 同料型的实例分割包和边缘分割包内容相同，只传一个（优先实例分割包）。
+- `平均料型_*.zip`、空/损坏 zip：计划阶段跳过。
+- **无标注模式**导入；程序先直传 zip 再**手动**建导入任务并等待结果。
+- 多日一次编排。首轮传不上的先暂存，全部日期结束后**统一重试一次**：自己的超时任务可 stop 后再传（管辖入口含「永锋-」前缀与「永锋废钢杂质分割」）；**他人任务不 stop、不抢入口**。
+- MinIO 直传超过约 5 分钟会终止该条并统一重试。
+- **防叠图**：成功记入每日 `datasets/uploaded.txt`（按文件名）；建任务后写 `upload_pending.txt`，超时中断下次可重查补记。重发指令已成功的自动跳过。
+- 「下载并上传」这类混合指令先只走下载，下完再单独发上传指令。
+- 凭据在 `config/settings.py`，可用 `.env` 的 `YONGFENG_UPLOAD_*` 覆盖。
 
 ### 3.2 镔鑫钢铁 · 废钢检判
 
@@ -345,6 +368,7 @@ BriefMe_Agent/
 │       ├── scrap_client.py        # Cookie satoken；列表 current/size
 │       ├── scrap_naming.py
 │       ├── scrap_packager.py
+│       ├── scrap_uploader.py      # datasets/ zip 上传金睛平台（登录→搜索→MinIO直传→导入任务）
 │       └── scrap_remote_sync.py   # scp 到 yf_feigang，失败不中断
 │
 ├── tools/
@@ -511,6 +535,7 @@ python -m pytest tests/ -x --tb=short -q
 
 ```bash
 python -m pytest tests/test_handbook_adversarial.py tests/test_yongfeng_download.py \
+  tests/test_yongfeng_upload.py \
   tests/test_image_download_route.py tests/test_shenglong_download.py -q
 ```
 
@@ -601,6 +626,8 @@ WPS/Excel 打开文件时可能生成 `.~xxx.xlsx` 临时锁文件。`app.py` �
 | 永锋异常图下载 | 已实现 | `agent/data_fetcher.py` |
 | 永锋检判原图下载 | 已实现 | `agent/yongfeng/downloader.py`（srape-steel） |
 | 永锋原图命名 / 打包 / scp | 已实现 | `scrap_naming.py` / `scrap_packager.py` / `scrap_remote_sync.py`（`yf_feigang`，失败不中断） |
+| 永锋分类 + 杂质数据集打包 | 已实现 | `pack_day_datasets()`（分类包复制为「废钢杂质数据集」） |
+| 永锋 datasets 上传金睛平台 | 已实现 | `scrap_uploader.py`（含杂质入口 id=28392） |
 | 永锋多标签分类数据集（人工确认） | 已实现 | `pack_multilabel_from_disk()`（永锋 packager） |
 | 镔鑫日/区间统计 | 已实现 | `agent/scrap/` |
 | 镔鑫错判图下载 | 已实现 | `agent/scrap/client.py` |
