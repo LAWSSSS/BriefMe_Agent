@@ -141,6 +141,45 @@ class YongfengScrapConfig(ShenglongConfig):
 
 
 @dataclass
+class YongfengDatasetUploadConfig:
+    """永锋废钢数据集上传（赛信金睛视觉AI开发平台）配置。
+
+    平台 http://pre-athena-mv.cisdigital.cn（namespace=1 机器视觉空间）。
+    把下载产物 <保存路径>/<日期>/datasets/ 里的 zip 上传到平台上的
+    永锋系列数据集（永锋-重废1 … 永锋-废钢分类、永锋废钢杂质分割）。zip 内只有 images/
+    目录，走无标注模式导入（options 不带 annotation_format）。
+
+    链路：登录 → 搜数据集 → MinIO STS 直传 → 建导入任务 → 轮询。
+    账号密码默认值可用 .env 的 YONGFENG_UPLOAD_* 覆盖。
+    """
+
+    base_url: str = os.getenv(
+        "YONGFENG_UPLOAD_BASE_URL", "http://pre-athena-mv.cisdigital.cn"
+    )
+    username: str = os.getenv("YONGFENG_UPLOAD_USERNAME", "intern1")
+    password: str = os.getenv("YONGFENG_UPLOAD_PASSWORD", "liuzhaocheng2026")
+    namespace: int = int(os.getenv("YONGFENG_UPLOAD_NAMESPACE", "1"))
+    # 目标数据集名 = dataset_name_prefix + zip 前缀（重废1 → 永锋-重废1）
+    dataset_name_prefix: str = "永锋-"
+    dataset_search_keyword: str = "永锋"
+    # 废钢杂质数据集.zip → 固定入口（平台名不含「永锋-」前缀）
+    impurity_dataset_name: str = os.getenv(
+        "YONGFENG_UPLOAD_IMPURITY_NAME", "永锋废钢杂质分割"
+    )
+    impurity_dataset_id: int = int(
+        os.getenv("YONGFENG_UPLOAD_IMPURITY_ID", "28392")
+    )
+    login_timeout: float = 15.0
+    request_timeout: float = 30.0
+    minio_timeout: float = 1800.0
+    # 单个 zip 直传（MinIO PUT）墙钟上限：直传有概率卡死，超过就终止
+    # 该上传，先传其他 zip，全部传完后统一重试（默认 5 分钟）。
+    upload_timeout: float = 300.0
+    job_poll_interval: float = 5.0
+    job_poll_max_attempts: int = 120
+
+
+@dataclass
 class VPNConfig:
     """aTrust VPN 配置"""
 
@@ -200,6 +239,9 @@ class Settings:
     scrap: ScrapConfig = field(default_factory=ScrapConfig)
     shenglong: ShenglongConfig = field(default_factory=ShenglongConfig)
     yongfeng_scrap: YongfengScrapConfig = field(default_factory=YongfengScrapConfig)
+    yongfeng_upload: YongfengDatasetUploadConfig = field(
+        default_factory=YongfengDatasetUploadConfig
+    )
     analysis_token: str = os.getenv("ANALYSIS_TOKEN", "")
     analysis_api_code: str = os.getenv("ANALYSIS_API_CODE", "st2")
 

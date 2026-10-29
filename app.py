@@ -13,12 +13,30 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import gradio as gr
 import httpx
+from starlette import status as _starlette_status
+
+# Gradio 6.x 每次入队都会读 Starlette 已弃用的 HTTP_422_UNPROCESSABLE_ENTITY，
+# 终端刷 StarletteDeprecationWarning，用户易当成上传报错。
+# 在模块上写入同值新常量，避免走 __getattr__ 弃用分支；并过滤残留警告。
+_starlette_status.HTTP_422_UNPROCESSABLE_ENTITY = (
+    _starlette_status.HTTP_422_UNPROCESSABLE_CONTENT
+)
+try:
+    from starlette.exceptions import StarletteDeprecationWarning as _StarletteDeprecationWarning
+except ImportError:  # pragma: no cover
+    _StarletteDeprecationWarning = UserWarning  # type: ignore[misc, assignment]
+warnings.filterwarnings(
+    "ignore",
+    message=".*HTTP_422_UNPROCESSABLE_ENTITY.*",
+    category=_StarletteDeprecationWarning,
+)
 
 from agent.core import SteelCoilAgent, _parse_save_path
 from agent.image_download_route import (
@@ -26,6 +44,7 @@ from agent.image_download_route import (
     is_dual_plant_image_or_pack_request,
     is_shenglong_image_download,
     is_shenglong_multilabel_pack,
+    is_yongfeng_dataset_upload,
     is_yongfeng_image_download,
     is_yongfeng_multilabel_pack,
 )
@@ -47,6 +66,7 @@ from agent.yongfeng.scrap_align import (
     uploaded_to_path,
 )
 from agent.yongfeng.scrap_packager import pack_multilabel_from_disk as pack_yongfeng_multilabel
+from agent.yongfeng.scrap_uploader import iter_upload_zips_for_dates
 from config.settings import settings
 
 logging.basicConfig(
@@ -232,11 +252,11 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                 "指定区间准确率报表": "生成 2026-04-01 到 2026-04-07 的烧结矿颗粒度人工筛分 vs 视觉准确率报表",
                 "支持哪些指令": (
                     "请列出你支持的所有功能和典型用法示例。"
-                    "分【打包带钢卷 @ 永锋】【烧结矿颗粒度 @ 永锋】【检判原图下载 @ 永锋】"
+                    "分【打包带钢卷 @ 永锋】【烧结矿颗粒度 @ 永锋】【检判原图上传下载 @ 永锋】"
                     "【废钢检判 @ 镔鑫】【球机图像下载 @ 镔鑫】【用友检判统计 @ 镔鑫】【废钢检判 @ 盛隆】回答。"
                 ),
             },
-            "检判原图下载": {
+            "检判原图上传下载": {
                 "下载昨日检判原图": f"下载 {yesterday} 的【永锋】检判原图",
                 "下载近 7 天检判原图": (
                     f"下载 {sl_week_start} 到 {sl_week_end} 的【永锋】检判原图"
@@ -244,6 +264,11 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
                 "指定日期下载": "下载 2026-09-01 的【永锋】检判原图",
                 "指定多个日期下载": (
                     "下载 2026-08-31、2026-09-01 的【永锋】检判原图"
+                ),
+                "上传昨日数据集": f"上传 {yesterday} 的【永锋】数据集",
+                "上传指定日期数据集": "上传 2026-09-01 的【永锋】数据集",
+                "上传多个日期数据集": (
+                    "上传 2026-08-31、2026-09-01 的【永锋】数据集"
                 ),
             },
             "废钢视觉人工对齐": {
@@ -614,7 +639,7 @@ def build_ui() -> gr.Blocks:
                     '    <span class="proj-site">永锋钢铁</span>'
                     '  </div>'
                     '  <div class="proj-row">'
-                    '    <span class="proj-tag pt">检判原图下载</span>'
+                    '    <span class="proj-tag pt">检判原图上传下载</span>'
                     '    <span class="proj-arrow">→</span>'
                     '    <span class="proj-site">永锋钢铁</span>'
                     '  </div>'
@@ -905,6 +930,80 @@ def build_ui() -> gr.Blocks:
                 xlsx, pptx, imgs = _scan_latest_artifacts()
                 yield history, session, xlsx, pptx, imgs, None
 
+        def upload_yongfeng_handler(message, history, session, save_dir):
+            """永锋 datasets/ zip 上传到金睛平台（单独指令，逐日流式汇报）。"""
+            history = _normalize_chat_history(history)
+            dest = (save_dir or "").strip() or _parse_save_path(message)
+            dates = parse_yongfeng_dates(message)
+            xlsx, pptx, imgs = _scan_latest_artifacts()
+            if not dest:
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "请先在左侧填写「图像保存路径」（与下载时同一个目录），"
+                        "再发送上传指令。程序会上传该目录下 <日期>/datasets/ 里的 zip。"
+                    ),
+                })
+                yield history, session, xlsx, pptx, imgs, None
+                return
+            if not dates:
+                history.append({
+                    "role": "assistant",
+                    "content": (
+                        "请写明要上传的日期，例如：\n"
+                        "上传 2026-09-01 的【永锋】数据集；\n"
+                        "上传 2026-08-31、2026-09-01 的【永锋】数据集。"
+                    ),
+                })
+                yield history, session, xlsx, pptx, imgs, None
+                return
+
+            date_label = "、".join(dates)
+            history.append({
+                "role": "assistant",
+                "content": (
+                    f"📤 开始上传 {date_label} 的【永锋】数据集 zip 到金睛平台\n"
+                    f"（pre-athena-mv.cisdigital.cn，无标注模式导入）\n"
+                    f"目录：{dest}\n"
+                    "每个 zip 上传后会自动建导入任务并等待结果。"
+                ),
+            })
+            yield history, session, xlsx, pptx, imgs, None
+
+            # 编排仍一次传入全部日期（跨日入口锁 + 统一重试）；
+            # 聊天版式与旧版一致：开场白 + 逐日【日期】块 + 全部日期处理完成。
+            lines = [history[-1]["content"]]
+            try:
+                for event in iter_upload_zips_for_dates(dest, dates=dates):
+                    if event.get("type") == "day":
+                        day_report = event.get("day_report") or {}
+                        day = day_report.get("day") or ""
+                        lines.append(f"\n【{day}】")
+                        lines.extend(day_report.get("lines") or [])
+                        history[-1]["content"] = "\n".join(lines[-80:])
+                        xlsx, pptx, imgs = _scan_latest_artifacts()
+                        yield history, session, xlsx, pptx, imgs, None
+                    elif event.get("type") == "done":
+                        result = event.get("result") or {}
+                        # 用最终态（含统一重试结果）重写逐日块，避免留下首轮 ⏳
+                        lines = [lines[0]]
+                        for day in result.get("days") or []:
+                            lines.append(f"\n【{day.get('day')}】")
+                            lines.extend(day.get("lines") or [])
+                        lines.append(
+                            f"\n全部日期处理完成：成功 {int(result.get('uploaded') or 0)} 个，"
+                            f"跳过 {int(result.get('skipped') or 0)} 个，"
+                            f"失败 {int(result.get('failed') or 0)} 个。"
+                        )
+                        history[-1]["content"] = "\n".join(lines[-80:])
+                        xlsx, pptx, imgs = _scan_latest_artifacts()
+                        yield history, session, xlsx, pptx, imgs, None
+            except Exception as exc:
+                lines.append(f"❌ 上传中断：{exc}")
+                history[-1]["content"] = "\n".join(lines[-80:])
+                xlsx, pptx, imgs = _scan_latest_artifacts()
+                yield history, session, xlsx, pptx, imgs, None
+
         # ========== 其他功能处理器（普通）==========
         def align_manual_handler(message, history, session, manual_upload):
             history = _normalize_chat_history(history)
@@ -1022,6 +1121,11 @@ def build_ui() -> gr.Blocks:
             elif is_shenglong_multilabel_pack(user_message):
                 for result in pack_multilabel_handler(
                     user_message, history, session, save_dir, yongfeng=False
+                ):
+                    yield result
+            elif is_yongfeng_dataset_upload(user_message):
+                for result in upload_yongfeng_handler(
+                    user_message, history, session, save_dir
                 ):
                     yield result
             elif is_yongfeng_image_download(user_message):
