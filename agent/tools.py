@@ -142,8 +142,10 @@ TOOLS = [
         "function": {
             "name": "scrap_export_report",
             "description": (
-                "【废钢检判项目】导出指定日期/日期范围的废钢检判统计 xlsx 报表，"
-                "并下载主料型判错车次的渲染图供人工分析。"
+                "【废钢检判项目】导出指定日期/日期范围的废钢检判统计 xlsx 报表。"
+                "错判渲染图是可选副作用：只有用户本次原文明确说"
+                "【下载错判图 / 错误渲染图 / 同时要图片】时才下载；"
+                "用户只说【导出报表】时必须只生成 xlsx。"
                 "报表按固定格式生成（13 列、三级表头、日期合并、错判行浅蓝填充）。"
                 "图片按 downloads/scrap/<日期>/ 分目录保存。"
             ),
@@ -160,7 +162,10 @@ TOOLS = [
                     },
                     "download_error_images": {
                         "type": "boolean",
-                        "description": "是否下载错判渲染图，默认 true",
+                        "description": (
+                            "本次是否下载错判渲染图。仅当用户明确要求错判图/渲染图时为 true；"
+                            "只要求导出报表时必须为 false。默认 false。"
+                        ),
                     },
                 },
                 "required": ["start_date", "end_date"],

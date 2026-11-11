@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from agent.shenglong.calculator import aggregate_period
 from agent.shenglong.client import ShenglongClient
 from agent.shenglong.excel_writer import write_stats_xlsx
 from config.settings import settings
@@ -51,11 +52,13 @@ def main() -> int:
             xlsx_name = f"盛隆赛迪废钢判级_{args.start}_{args.end}.xlsx"
         out_root.mkdir(parents=True, exist_ok=True)
         xlsx_path = out_root / xlsx_name
+        period = aggregate_period(stats_list, args.start, args.end)
         write_stats_xlsx(
             stats_list,
             xlsx_path,
             target_recognition_rate=cfg.target_recognition_rate,
             target_deduction_compliance_rate=cfg.target_deduction_compliance_rate,
+            period_summary=period,
         )
 
         print()

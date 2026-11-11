@@ -16,11 +16,21 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from agent.artifacts import (
+    RunRecord,
+    append_step,
+    new_run,
+    register_artifacts_from_result,
+    run_from_dict,
+    sync_current_run,
+)
 from agent.data_fetcher import VisionAPIClient
+from agent.intent_policy import resolve_scrap_download_images
 from agent.llm_client import OpenAICompatClient
 from agent.shenglong.downloader import download_images_by_date_range
 from agent.shenglong.packager import pack_multilabel_from_disk
@@ -41,6 +51,92 @@ from agent.yongfeng.main import run_report as run_yongfeng_report
 
 logger = logging.getLogger(__name__)
 
+StatusCallback = Callable[[str], None]
+
+TOOL_ACTIVITY_LABELS = {
+    "get_daily_stats": "查询永锋打包带日报",
+    "get_date_range_stats": "查询永锋打包带区间数据",
+    "download_abnormal_images": "下载异常钢卷图片",
+    "yongfeng_export_and_upload_report": "生成并上传报表",
+    "scrap_get_daily_summary": "查询镔鑫废钢日报",
+    "scrap_get_range_summary": "查询镔鑫废钢区间数据",
+    "scrap_export_report": "导出镔鑫废钢报表",
+    "scrap_export_ppt": "生成镔鑫废钢汇报页",
+    "scrap_weekly_type_stats": "统计镔鑫各料型周报",
+    "shenglong_get_daily_summary": "查询盛隆废钢日报",
+    "shenglong_get_range_summary": "查询盛隆废钢区间数据",
+    "shenglong_export_report": "导出盛隆废钢报表",
+    "shenglong_export_master_report": "生成盛隆多周期主表",
+    "shenglong_export_heavy_master_report": "生成盛隆重废归一化主表",
+    "yongfeng_export_accuracy_report": "生成永锋烧结矿准确率报表",
+    "download_shenglong_images": "下载盛隆检判原图",
+    "pack_shenglong_multilabel": "打包盛隆多标签数据集",
+    "download_yongfeng_images": "下载永锋检判原图",
+    "upload_yongfeng_datasets": "上传永锋数据集",
+    "yongfeng_align_scrap_manual": "对齐永锋人工检判结果",
+    "bxsteel_download_images": "下载镔鑫球机图像",
+    "yongyou_download_images": "下载用友检判结果图",
+}
+
+
+def _emit_status(callback: Optional[StatusCallback], message: str) -> None:
+    if not callback or not message:
+        return
+    try:
+        callback(message)
+    except Exception:
+        logger.debug("状态回调失败", exc_info=True)
+
+
+def _session_run(session: Dict[str, Any], message: str) -> RunRecord:
+    current = session.get("current_run")
+    if isinstance(current, dict) and current.get("run_id"):
+        return run_from_dict(current)
+    run = new_run("", "", message)
+    sync_current_run(session, run)
+    return run
+
+
+def _record_state_run_status(
+    session: Dict[str, Any],
+    run: RunRecord,
+    on_status: Optional[StatusCallback],
+    text: str,
+) -> None:
+    append_step(run, text)
+    sync_current_run(session, run)
+    _emit_status(on_status, text)
+
+
+def _tool_activity_message(func_name: str, args: Dict[str, Any]) -> str:
+    """生成不含敏感信息、可展示给用户的工具执行说明。"""
+    label = TOOL_ACTIVITY_LABELS.get(func_name, func_name)
+    details: List[str] = []
+    for key in ("date", "start_date", "end_date"):
+        value = args.get(key)
+        if value:
+            details.append(f"{key}={value}")
+    dates = args.get("dates")
+    if isinstance(dates, list) and dates:
+        details.append("日期=" + "、".join(str(item) for item in dates[:8]))
+    cycles = args.get("cycles")
+    if isinstance(cycles, list) and cycles:
+        details.append(f"{len(cycles)} 个统计周期")
+    output_dir = args.get("output_dir")
+    if output_dir:
+        details.append(f"保存到 {output_dir}")
+    if any(
+        key in args and args.get(key)
+        for key in ("username", "password", "token", "api_key", "secret")
+    ):
+        details.append("登录凭证已处理")
+    if args.get("download_error_images") is not None:
+        details.append(
+            "下载错判图" if args.get("download_error_images") else "不下载错判图"
+        )
+    suffix = f"（{', '.join(details)}）" if details else ""
+    return f"调用工具 **{label}** `{func_name}`{suffix}"
+
 
 def _parse_save_path(text: str) -> str:
     """从用户回复里抽出本机保存路径。"""
@@ -55,8 +151,13 @@ def _parse_save_path(text: str) -> str:
         return ""
     if candidate in {"默认", "default", "空"}:
         return ""
-    path = Path(candidate).expanduser()
-    if candidate.startswith("/") or candidate.startswith("~") or path.drive:
+    if candidate.startswith("/"):
+        # Keep POSIX-style paths stable when the UI is hosted on Windows.
+        return candidate
+    if candidate.startswith("~"):
+        return Path(candidate).expanduser().as_posix()
+    path = Path(candidate)
+    if path.drive:
         return str(path)
     if re.match(r"^[A-Za-z]:[\\/]", candidate):
         return candidate
@@ -224,6 +325,12 @@ def _build_system_prompt() -> str:
         "   含【下载/检判原图/智能判级照片】或「下载并上传」的指令不要走本条，先走下载；"
         "等下载结束用户再单独发上传指令时才调用本工具。\n"
         "   必须带保存路径（与下载时同一目录）；dates 填日期数组，不要当成区间补中间天。\n"
+        "【可选副作用必须逐项服从本次原文】快捷指令只是模板，不是固定流程。\n"
+        "用户删除了“并下载错判图 / 附带图片 / 一并上传”等内容时，只执行保留的动作，"
+        "不得因为工具默认值、上一轮历史或快捷模板而补回副作用。\n"
+        "例如：`导出某区间【镔鑫】废钢检判报表` 且没有提到错判图时，"
+        "scrap_export_report 的 download_error_images 必须为 false；"
+        "只有明确出现“并下载错判图/渲染图/同时要图片”才设为 true。\n"
         "路由错误会引发严重现场事故，请严格遵守。\n\n"
         f"今天是{today.strftime('%Y-%m-%d')}，"
         f"昨天是{yesterday.strftime('%Y-%m-%d')}，"
@@ -355,6 +462,7 @@ class SteelCoilAgent:
         self,
         user_message: str,
         session: Dict[str, Any],
+        on_status: Optional[StatusCallback] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         处理一条用户消息。
@@ -380,30 +488,33 @@ class SteelCoilAgent:
         vpn_state = session.get("vpn_state", "unknown")
 
         if vpn_state == "waiting_code":
-            return self._handle_vpn_input(user_message, session)
+            return self._handle_vpn_input(user_message, session, on_status)
 
         if vpn_state == "waiting_confirm":
-            return self._handle_vpn_confirm(user_message, session)
+            return self._handle_vpn_confirm(user_message, session, on_status)
 
         if vpn_state == "waiting_bxsteel_creds":
-            return self._handle_bxsteel_creds(user_message, session)
+            return self._handle_bxsteel_creds(user_message, session, on_status)
 
         if vpn_state == "waiting_yongyou_creds":
-            return self._handle_yongyou_creds(user_message, session)
+            return self._handle_yongyou_creds(user_message, session, on_status)
 
         if vpn_state == "waiting_shenglong_dir":
-            return self._handle_shenglong_dir(user_message, session)
+            return self._handle_shenglong_dir(user_message, session, on_status)
 
         if vpn_state == "waiting_yongfeng_dir":
-            return self._handle_yongfeng_dir(user_message, session)
+            return self._handle_yongfeng_dir(user_message, session, on_status)
 
-        return self._process_message(user_message, session)
+        return self._process_message(user_message, session, on_status)
 
     # ------------------------------------------------------------------
     #  VPN 交互处理
     # ------------------------------------------------------------------
     def _handle_vpn_input(
-        self, user_input: str, session: Dict[str, Any]
+        self,
+        user_input: str,
+        session: Dict[str, Any],
+        on_status: Optional[StatusCallback] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """处理 VPN 等待验证码阶段的用户输入"""
         stripped = user_input.strip()
@@ -414,7 +525,9 @@ class SteelCoilAgent:
                 session["vpn_state"] = "connected"
                 pending = session.pop("pending_query", None)
                 if pending:
-                    reply, session = self._process_message(pending, session)
+                    reply, session = self._process_message(
+                        pending, session, on_status
+                    )
                     return f"VPN 连接成功！\n\n{reply}", session
                 return "VPN 连接成功！请问需要查询什么？", session
             else:
@@ -422,14 +535,17 @@ class SteelCoilAgent:
                 return msg, session
 
         if self._is_confirm(stripped):
-            return self._handle_vpn_confirm(stripped, session)
+            return self._handle_vpn_confirm(stripped, session, on_status)
 
         session["vpn_state"] = "unknown"
         session.pop("pending_query", None)
-        return self._process_message(user_input, session)
+        return self._process_message(user_input, session, on_status)
 
     def _handle_vpn_confirm(
-        self, user_input: str, session: Dict[str, Any]
+        self,
+        user_input: str,
+        session: Dict[str, Any],
+        on_status: Optional[StatusCallback] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """处理用户回复"已连接"的确认"""
         if self._is_confirm(user_input.strip()):
@@ -438,7 +554,9 @@ class SteelCoilAgent:
                 session["vpn_state"] = "connected"
                 pending = session.pop("pending_query", None)
                 if pending:
-                    reply, session = self._process_message(pending, session)
+                    reply, session = self._process_message(
+                        pending, session, on_status
+                    )
                     return f"VPN 已连通！\n\n{reply}", session
                 return "VPN 已连通！请问需要查询什么？", session
             else:
@@ -446,7 +564,7 @@ class SteelCoilAgent:
 
         session["vpn_state"] = "unknown"
         session.pop("pending_query", None)
-        return self._process_message(user_input, session)
+        return self._process_message(user_input, session, on_status)
 
     @staticmethod
     def _is_confirm(text: str) -> bool:
@@ -454,7 +572,10 @@ class SteelCoilAgent:
         return any(kw in text for kw in keywords)
 
     def _handle_bxsteel_creds(
-        self, user_input: str, session: Dict[str, Any]
+        self,
+        user_input: str,
+        session: Dict[str, Any],
+        on_status: Optional[StatusCallback] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """解析用户回复的镔鑫凭证信息并执行下载"""
         import re
@@ -462,7 +583,7 @@ class SteelCoilAgent:
         pending = self._bxsteel_pending_args
         if not pending:
             session["vpn_state"] = "unknown"
-            return self._process_message(user_input, session)
+            return self._process_message(user_input, session, on_status)
 
         text = user_input.strip()
 
@@ -513,7 +634,9 @@ class SteelCoilAgent:
         session["vpn_state"] = "unknown"
         self._bxsteel_pending_args = None
 
+        _emit_status(on_status, "正在使用已补充的凭证下载镔鑫球机图像…")
         result = self._tool_bxsteel_download_images(**pending)
+        _emit_status(on_status, "镔鑫球机图像下载完成，正在整理结果…")
         session["messages"].append({
             "role": "assistant",
             "content": result.get("summary_text", "下载完成"),
@@ -521,14 +644,17 @@ class SteelCoilAgent:
         return result.get("summary_text", "下载完成"), session
 
     def _handle_yongyou_creds(
-        self, user_input: str, session: Dict[str, Any]
+        self,
+        user_input: str,
+        session: Dict[str, Any],
+        on_status: Optional[StatusCallback] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         import re
 
         pending = self._yongyou_pending_args
         if not pending:
             session["vpn_state"] = "unknown"
-            return self._process_message(user_input, session)
+            return self._process_message(user_input, session, on_status)
 
         text = user_input.strip()
 
@@ -574,7 +700,9 @@ class SteelCoilAgent:
         session["vpn_state"] = "unknown"
         self._yongyou_pending_args = None
 
+        _emit_status(on_status, "正在使用已补充的凭证下载用友检判结果图…")
         result = self._tool_yongyou_download_images(**pending)
+        _emit_status(on_status, "用友检判结果图下载完成，正在整理结果…")
         session["messages"].append({
             "role": "assistant",
             "content": result.get("summary_text", "下载完成"),
@@ -582,12 +710,15 @@ class SteelCoilAgent:
         return result.get("summary_text", "下载完成"), session
 
     def _handle_shenglong_dir(
-        self, user_input: str, session: Dict[str, Any]
+        self,
+        user_input: str,
+        session: Dict[str, Any],
+        on_status: Optional[StatusCallback] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         pending = self._shenglong_pending_args
         if not pending:
             session["vpn_state"] = "unknown"
-            return self._process_message(user_input, session)
+            return self._process_message(user_input, session, on_status)
 
         output_dir = _parse_save_path(user_input)
         if not output_dir:
@@ -608,23 +739,36 @@ class SteelCoilAgent:
 
         session["vpn_state"] = "unknown"
         self._shenglong_pending_args = None
+        run = _session_run(session, user_input)
+        _record_state_run_status(
+            session, run, on_status, "已收到保存路径，正在下载盛隆检判原图…"
+        )
         result = self._tool_download_shenglong_images(
             pending.get("start_date", ""),
             pending.get("end_date", ""),
             pending.get("output_dir"),
             pending.get("dates"),
         )
+        register_artifacts_from_result(
+            run, "download_shenglong_images", result, output_dir=output_dir
+        )
+        _record_state_run_status(
+            session, run, on_status, "盛隆检判原图下载完成，正在整理结果…"
+        )
         text = result.get("summary_text", "下载完成")
         session["messages"].append({"role": "assistant", "content": text})
         return text, session
 
     def _handle_yongfeng_dir(
-        self, user_input: str, session: Dict[str, Any]
+        self,
+        user_input: str,
+        session: Dict[str, Any],
+        on_status: Optional[StatusCallback] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         pending = self._yongfeng_pending_args
         if not pending:
             session["vpn_state"] = "unknown"
-            return self._process_message(user_input, session)
+            return self._process_message(user_input, session, on_status)
 
         output_dir = _parse_save_path(user_input)
         if not output_dir:
@@ -645,11 +789,21 @@ class SteelCoilAgent:
 
         session["vpn_state"] = "unknown"
         self._yongfeng_pending_args = None
+        run = _session_run(session, user_input)
+        _record_state_run_status(
+            session, run, on_status, "已收到保存路径，正在下载永锋检判原图…"
+        )
         result = self._tool_download_yongfeng_images(
             pending.get("start_date", ""),
             pending.get("end_date", ""),
             pending.get("output_dir"),
             pending.get("dates"),
+        )
+        register_artifacts_from_result(
+            run, "download_yongfeng_images", result, output_dir=output_dir
+        )
+        _record_state_run_status(
+            session, run, on_status, "永锋检判原图下载完成，正在整理结果…"
         )
         text = result.get("summary_text", "下载完成")
         session["messages"].append({"role": "assistant", "content": text})
@@ -659,10 +813,21 @@ class SteelCoilAgent:
     #  核心消息处理：LLM 意图解析 → 工具调用 → 格式化回复
     # ------------------------------------------------------------------
     def _process_message(
-        self, message: str, session: Dict[str, Any]
+        self,
+        message: str,
+        session: Dict[str, Any],
+        on_status: Optional[StatusCallback] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         messages: List[Dict[str, Any]] = session["messages"]
         messages.append({"role": "user", "content": message})
+        run = _session_run(session, message)
+
+        def emit_status(text: str) -> None:
+            append_step(run, text)
+            sync_current_run(session, run)
+            _emit_status(on_status, text)
+
+        emit_status("正在分析指令并选择业务工具…")
 
         try:
             response = self.client.chat.completions.create(
@@ -681,10 +846,15 @@ class SteelCoilAgent:
 
         if not assistant_msg.tool_calls:
             reply = assistant_msg.content or ""
+            emit_status("已完成分析，正在整理回复…")
             messages.append({"role": "assistant", "content": reply})
             return reply, session
 
         tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
+        route_labels = "、".join(
+            TOOL_ACTIVITY_LABELS.get(name, name) for name in tool_names
+        )
+        emit_status(f"已确定处理路径：{route_labels}")
         # 盛隆图像、永锋检判原图/多标签、镔鑫球机、用友图片不走打包带「视觉 API 配置」校验。
         # 永锋检判原图与打包带同属永锋专网，单独走打包带连通性，避免把烧结/打包带接口 TODO 当成前置条件。
         yongfeng_image_tool = any(n == "download_yongfeng_images" for n in tool_names)
@@ -701,11 +871,15 @@ class SteelCoilAgent:
             for n in tool_names
         )
 
-        if (any_packing_tool or yongfeng_image_tool or yongfeng_align_tool) and not self.vpn.check_connectivity():
-            session["vpn_state"] = "waiting_code"
-            session["pending_query"] = message
-            messages.pop()
-            return self.vpn.get_connection_prompt(), session
+        if any_packing_tool or yongfeng_image_tool or yongfeng_align_tool:
+            emit_status("正在检查业务系统连接状态…")
+            if not self.vpn.check_connectivity():
+                emit_status("业务系统尚未连接，正在准备连接提示…")
+                session["vpn_state"] = "waiting_code"
+                session["pending_query"] = message
+                messages.pop()
+                return self.vpn.get_connection_prompt(), session
+            emit_status("业务系统连接正常")
 
         if any_packing_tool:
             config_issues = settings.validate()
@@ -730,6 +904,7 @@ class SteelCoilAgent:
                 except json.JSONDecodeError:
                     args = {}
                 if not args.get("username") or not args.get("password"):
+                    emit_status("需要补充登录凭证，等待用户输入…")
                     self._bxsteel_pending_args = args
                     session["vpn_state"] = "waiting_bxsteel_creds"
                     messages.pop()
@@ -752,6 +927,7 @@ class SteelCoilAgent:
                     args.get("output_dir") or self._default_shenglong_output_dir or ""
                 ).strip()
                 if not dest:
+                    emit_status("需要补充保存路径，等待用户输入…")
                     self._shenglong_pending_args = args
                     session["vpn_state"] = "waiting_shenglong_dir"
                     messages.pop()
@@ -764,12 +940,24 @@ class SteelCoilAgent:
                         session,
                     )
                 args["output_dir"] = dest
+                emit_status(_tool_activity_message(func_name, args) + "，正在执行…")
+                started = time.monotonic()
                 result = self._tool_download_shenglong_images(
                     args.get("start_date", ""),
                     args.get("end_date", ""),
                     args.get("output_dir"),
                     args.get("dates"),
                 )
+                emit_status(
+                    f"盛隆检判原图下载完成，用时 {time.monotonic() - started:.1f} 秒",
+                )
+                register_artifacts_from_result(
+                    run,
+                    func_name,
+                    result,
+                    output_dir=args.get("output_dir"),
+                )
+                sync_current_run(session, run)
                 messages.append(
                     {
                         "role": "tool",
@@ -791,6 +979,7 @@ class SteelCoilAgent:
                     or ""
                 ).strip()
                 if not dest:
+                    emit_status("需要补充保存路径，等待用户输入…")
                     self._yongfeng_pending_args = args
                     session["vpn_state"] = "waiting_yongfeng_dir"
                     messages.pop()
@@ -803,12 +992,24 @@ class SteelCoilAgent:
                         session,
                     )
                 args["output_dir"] = dest
+                emit_status(_tool_activity_message(func_name, args) + "，正在执行…")
+                started = time.monotonic()
                 result = self._tool_download_yongfeng_images(
                     args.get("start_date", ""),
                     args.get("end_date", ""),
                     args.get("output_dir"),
                     args.get("dates"),
                 )
+                emit_status(
+                    f"永锋检判原图下载完成，用时 {time.monotonic() - started:.1f} 秒",
+                )
+                register_artifacts_from_result(
+                    run,
+                    func_name,
+                    result,
+                    output_dir=args.get("output_dir"),
+                )
+                sync_current_run(session, run)
                 messages.append(
                     {
                         "role": "tool",
@@ -824,6 +1025,7 @@ class SteelCoilAgent:
                     args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
                     args = {}
+                emit_status("需要补充登录凭证，等待用户输入…")
                 self._yongyou_pending_args = args
                 session["vpn_state"] = "waiting_yongyou_creds"
                 messages.pop()
@@ -837,7 +1039,30 @@ class SteelCoilAgent:
                     session,
                 )
 
-            result = self._execute_tool(tool_call)
+            try:
+                args = json.loads(tool_call.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
+            if func_name == "scrap_export_report":
+                args["download_error_images"] = resolve_scrap_download_images(
+                    message,
+                    args.get("download_error_images"),
+                )
+                tool_call.function.arguments = json.dumps(
+                    args,
+                    ensure_ascii=False,
+                )
+            emit_status(_tool_activity_message(func_name, args) + "，正在执行…")
+            started = time.monotonic()
+            result = self._execute_tool(tool_call, user_message=message)
+            elapsed = time.monotonic() - started
+            result_label = TOOL_ACTIVITY_LABELS.get(func_name, func_name)
+            if isinstance(result, dict) and result.get("error"):
+                emit_status(f"{result_label}返回异常，用时 {elapsed:.1f} 秒，正在处理…")
+            else:
+                emit_status(f"{result_label}已完成，用时 {elapsed:.1f} 秒")
+            register_artifacts_from_result(run, func_name, result)
+            sync_current_run(session, run)
             messages.append(
                 {
                     "role": "tool",
@@ -846,6 +1071,7 @@ class SteelCoilAgent:
                 }
             )
 
+        emit_status("工具执行完成，正在汇总结果并生成最终回复…")
         try:
             final = self.client.chat.completions.create(
                 model=settings.llm.model,
@@ -864,7 +1090,12 @@ class SteelCoilAgent:
     # ------------------------------------------------------------------
     #  工具执行
     # ------------------------------------------------------------------
-    def _execute_tool(self, tool_call: Any) -> Dict[str, Any]:
+    def _execute_tool(
+        self,
+        tool_call: Any,
+        *,
+        user_message: str = "",
+    ) -> Dict[str, Any]:
         func_name = tool_call.function.name
         try:
             args = json.loads(tool_call.function.arguments)
@@ -922,10 +1153,15 @@ class SteelCoilAgent:
             )
 
         if func_name == "scrap_export_report":
+            download_error_images = resolve_scrap_download_images(
+                user_message,
+                args.get("download_error_images"),
+            )
+            args["download_error_images"] = download_error_images
             return self._tool_scrap_export(
                 args.get("start_date", ""),
                 args.get("end_date", ""),
-                bool(args.get("download_error_images", True)),
+                download_error_images,
             )
 
         if func_name == "scrap_export_ppt":
