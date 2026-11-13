@@ -53,6 +53,8 @@ warnings.filterwarnings(
     category=_StarletteDeprecationWarning,
 )
 
+logger = logging.getLogger(__name__)
+
 from agent.core import SteelCoilAgent, _parse_save_path
 from agent.artifacts import (
     append_step,
@@ -1207,11 +1209,14 @@ def first_run_path_notice(history: list):
 # =====================================================================
 # 快捷 prompt（左侧指令台）—— 点选后预览，再「填入输入框」由用户回车发送
 # =====================================================================
-def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
-    yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-    week_start = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
-    today_s = date.today().strftime("%Y-%m-%d")
-    sl_week_start, sl_week_end = last_complete_7_days()
+def _quick_prompts(
+    current_day: Optional[date] = None,
+) -> Dict[str, Dict[str, Dict[str, str]]]:
+    day = current_day or date.today()
+    yesterday = (day - timedelta(days=1)).strftime("%Y-%m-%d")
+    week_start = (day - timedelta(days=7)).strftime("%Y-%m-%d")
+    today_s = day.strftime("%Y-%m-%d")
+    complete_week_start, complete_week_end = last_complete_7_days(day)
     return {
         "永锋钢铁": {
             "打包带钢卷": {
@@ -1220,7 +1225,10 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             },
             "烧结矿颗粒度": {
                 "昨日准确率报表": f"生成 {yesterday} 的烧结矿颗粒度人工筛分 vs 视觉准确率报表",
-                "指定区间准确率报表": "生成 2026-04-01 到 2026-04-07 的烧结矿颗粒度人工筛分 vs 视觉准确率报表",
+                "指定区间准确率报表": (
+                    f"生成 {complete_week_start} 到 {complete_week_end} 的"
+                    "烧结矿颗粒度人工筛分 vs 视觉准确率报表"
+                ),
                 "支持哪些指令": (
                     "请列出你支持的所有功能和典型用法示例。"
                     "分【打包带钢卷 @ 永锋】【烧结矿颗粒度 @ 永锋】【检判原图上传下载 @ 永锋】"
@@ -1230,7 +1238,7 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             "检判原图上传下载": {
                 "下载昨日检判原图": f"下载 {yesterday} 的【永锋】检判原图",
                 "下载近 7 天检判原图": (
-                    f"下载 {sl_week_start} 到 {sl_week_end} 的【永锋】检判原图"
+                    f"下载 {complete_week_start} 到 {complete_week_end} 的【永锋】检判原图"
                 ),
                 "指定日期下载": "下载 2026-09-01 的【永锋】检判原图",
                 "指定多个日期下载": (
@@ -1250,13 +1258,16 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             "废钢检判": {
                 "昨日废钢检判情况": f"发 {yesterday} 的【镔鑫】废钢检判情况",
                 "近 7 天报表 + 错判图": (
-                    f"导出 {week_start} 到 {today_s} 的【镔鑫】废钢检判报表并下载错判图"
+                    f"导出 {complete_week_start} 到 {complete_week_end} 的"
+                    "【镔鑫】废钢检判报表并下载错判图"
                 ),
                 "近 7 天 PPT 汇报页": (
-                    f"按 {week_start} 到 {today_s} 的【镔鑫】检判结果生成对应的 PPT 汇报页"
+                    f"按 {complete_week_start} 到 {complete_week_end} 的"
+                    "【镔鑫】检判结果生成对应的 PPT 汇报页"
                 ),
                 "近 7 天各料型统计+汇报": (
-                    f"统计 {week_start} 到 {today_s} 的【镔鑫】各料型周度数据并导出报表"
+                    f"统计 {complete_week_start} 到 {complete_week_end} 的"
+                    "【镔鑫】各料型周度数据并导出报表"
                 ),
                 "支持哪些指令": (
                     "请列出你支持的所有功能和典型用法示例。"
@@ -1276,7 +1287,7 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             "检判原图下载": {
                 "下载昨日检判原图": f"下载 {yesterday} 的【盛隆】检判原图",
                 "下载近 7 天检判原图": (
-                    f"下载 {sl_week_start} 到 {sl_week_end} 的【盛隆】检判原图"
+                    f"下载 {complete_week_start} 到 {complete_week_end} 的【盛隆】检判原图"
                 ),
                 "指定日期下载": "下载 2026-08-01 的【盛隆】检判原图",
                 "指定多个日期下载": (
@@ -1291,7 +1302,10 @@ def _quick_prompts() -> Dict[str, Dict[str, Dict[str, str]]]:
             },
             "废钢检判": {
                 "昨日废钢检判情况": f"发 {yesterday} 的【盛隆】废钢检判情况",
-                "近 7 天报表": f"导出 {sl_week_start} 到 {sl_week_end} 的【盛隆】废钢检判报表",
+                "近 7 天报表": (
+                    f"导出 {complete_week_start} 到 {complete_week_end} 的"
+                    "【盛隆】废钢检判报表"
+                ),
                 "主表（多周期累积）": (
                     "生成【盛隆】主表，把这两个周期累积到一个 xlsx："
                     "2026-04-14 至 2026-04-22、2026-04-23 至 2026-04-29"
@@ -3842,8 +3856,8 @@ CHAT_KEYBOARD_JS = r"""
             lift: compact ? .5 : 1,
             pressY: compact ? .35 : .65,
             pressScale: compact ? .993 : .986,
-            bounce: compact ? .16 : .30,
-            overshootScale: compact ? 1.001 : 1.0025,
+            bounce: compact ? .10 : .18,
+            overshootScale: compact ? 1.0006 : 1.0012,
         };
     };
 
@@ -3967,7 +3981,6 @@ CHAT_KEYBOARD_JS = r"""
         state.rebounding = true;
         const pose = targetPose(control, state);
         const metrics = motionMetrics(control);
-        const landedOnHover = pose.y < -.01;
 
         animatePose(
             control,
@@ -3986,22 +3999,12 @@ CHAT_KEYBOARD_JS = r"""
                 },
             ],
             {
-                duration: 235,
-                easing: "cubic-bezier(.2, .72, .2, 1)",
+                duration: 200,
+                easing: "cubic-bezier(.2, .8, .2, 1)",
             },
             pose,
             () => {
                 state.rebounding = false;
-                // 鼠标在回弹中移出时，不打断回弹；落稳后再以同一节奏下沉。
-                if (!state.hovered && landedOnHover) {
-                    animateRest(control);
-                } else if (
-                    state.hovered
-                    && !landedOnHover
-                    && canAnimateControl(control)
-                ) {
-                    animateHover(control);
-                }
             }
         );
     };
@@ -4013,7 +4016,8 @@ CHAT_KEYBOARD_JS = r"""
         if (event.relatedTarget && control.contains(event.relatedTarget)) return;
         const state = getMotionState(control);
         state.hovered = true;
-        if (state.pressed || state.rebounding) return;
+        if (state.pressed) return;
+        state.rebounding = false;
         animateHover(control);
     }, true);
 
@@ -4024,7 +4028,8 @@ CHAT_KEYBOARD_JS = r"""
         if (event.relatedTarget && control.contains(event.relatedTarget)) return;
         const state = getMotionState(control);
         state.hovered = false;
-        if (state.pressed || state.rebounding) return;
+        if (state.pressed) return;
+        state.rebounding = false;
         animateRest(control);
     }, true);
 

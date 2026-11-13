@@ -151,13 +151,8 @@ def _parse_save_path(text: str) -> str:
         return ""
     if candidate in {"默认", "default", "空"}:
         return ""
-    if candidate.startswith("/"):
-        # Keep POSIX-style paths stable when the UI is hosted on Windows.
-        return candidate
-    if candidate.startswith("~"):
-        return Path(candidate).expanduser().as_posix()
-    path = Path(candidate)
-    if path.drive:
+    path = Path(candidate).expanduser()
+    if candidate.startswith("/") or candidate.startswith("~") or path.drive:
         return str(path)
     if re.match(r"^[A-Za-z]:[\\/]", candidate):
         return candidate
@@ -217,6 +212,7 @@ def _build_system_prompt() -> str:
     today = date.today()
     yesterday = today - timedelta(days=1)
     day_before = today - timedelta(days=2)
+    yongfeng_recent_start = yesterday - timedelta(days=6)
 
     return (
         "你是 BriefMe，中冶赛迪（重庆）信息技术有限公司内部使用的多场景数据统计智能助手，"
@@ -338,6 +334,12 @@ def _build_system_prompt() -> str:
         "盛隆/永锋检判原图「近7天 / 近一周」：区间必须是昨天往前共 7 个自然日"
         "（含昨天、不含今天）。例如今天是 2026-08-27，则 "
         "start_date=2026-08-20、end_date=2026-08-26。不要把今天算进去。\n\n"
+        "永锋烧结矿准确率「指定区间准确率报表 / 最近7天」："
+        "如果用户没有明确给出其他日期，start_time 和 end_time 必须使用"
+        f"{yongfeng_recent_start.strftime('%Y-%m-%d')} 至 "
+        f"{yesterday.strftime('%Y-%m-%d')}，即昨天往前共 7 个完整自然日"
+        "（含昨天、不含今天）。不得复用 2026 年 4 月等历史示例日期；"
+        "用户明确给出日期时，严格使用用户给出的日期。\n\n"
         "=============== 永锋废钢视觉/人工对齐输出格式 ===============\n"
         "收到 yongfeng_align_scrap_manual 的结果后，直接转述 summary_text，不要改数字。\n"
         "若有 xlsx_path，单独一行写出文件路径。\n\n"
@@ -414,6 +416,33 @@ def _build_system_prompt() -> str:
         "必须用工具返回的真实数字填充，不要输出 XXX 占位符。\n"
         "如果用户的问题与以上四个项目都无关，友好简洁地回答即可。"
     )
+
+
+_EXPLICIT_DATE_RE = re.compile(
+    r"(?:\d{4}\s*[年./-]\s*\d{1,2})|(?:\d{1,2}\s*[月./-]\s*\d{1,2})"
+)
+_RECENT_RANGE_TERMS = ("指定区间", "近7天", "近 7 天", "最近7天", "近一周", "最近一周")
+
+
+def _normalize_yongfeng_accuracy_args(
+    args: Dict[str, Any],
+    user_message: str,
+    current_day: Optional[date] = None,
+) -> Dict[str, Any]:
+    """无明确日期时，把永锋“指定区间/近7天”固定为最近完整自然周。"""
+    message = str(user_message or "")
+    if not any(term in message for term in _RECENT_RANGE_TERMS):
+        return dict(args)
+    if _EXPLICIT_DATE_RE.search(message):
+        return dict(args)
+
+    day = current_day or date.today()
+    start = day - timedelta(days=7)
+    end = day - timedelta(days=1)
+    normalized = dict(args)
+    normalized["start_time"] = f"{start.strftime('%Y-%m-%d')} 00:00:00"
+    normalized["end_time"] = f"{end.strftime('%Y-%m-%d')} 23:59:59"
+    return normalized
 
 
 class SteelCoilAgent:
@@ -1048,6 +1077,12 @@ class SteelCoilAgent:
                     message,
                     args.get("download_error_images"),
                 )
+                tool_call.function.arguments = json.dumps(
+                    args,
+                    ensure_ascii=False,
+                )
+            if func_name == "yongfeng_export_accuracy_report":
+                args = _normalize_yongfeng_accuracy_args(args, message)
                 tool_call.function.arguments = json.dumps(
                     args,
                     ensure_ascii=False,

@@ -1,4 +1,4 @@
-name: CI
+name: CI Pipeline
 
 on:
   push:
@@ -11,7 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # 名称必须保持 build-and-test：分支保护规则把该检查设为 Required
+  build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
