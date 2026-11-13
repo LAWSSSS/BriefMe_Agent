@@ -1,11 +1,57 @@
-# 🏭 BriefMe · 多场景工业智能决策助手
+# 🏭 BriefMe · 多场景数据统计助手
 
-
+![BriefMe 界面预览](docs/images/briefme-ui.png)
 
 ## 📖 项目简介
 
 BriefMe 是一个为工业现场量身定制的数据统计交互智能体。
 它本身**不持久化存储任何业务数据**，而是通过解析用户的自然语言指令，智能路由并调用对应的现场业务系统 API 实时取数。数据经过本地核心算法层清洗与计算后，自动生成并交付标准化的 Excel 报表、PPT 汇报以及异常监控图片。
+
+## 🚀 快速开始
+
+### 环境要求
+
+- Python 3.12+
+- 可访问对应业务系统的现场网络或 VPN
+- 一个 OpenAI 兼容的大模型 API Key
+
+### 安装与启动
+
+```bash
+git clone -b master https://github.com/LAWSSSS/BriefMe_Agent.git
+cd BriefMe_Agent
+
+python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# macOS / Linux
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+复制环境变量模板并填写本机配置：
+
+```bash
+# Windows PowerShell
+Copy-Item .env.example .env
+
+# macOS / Linux
+cp .env.example .env
+```
+
+至少需要配置 `DEEPSEEK_API_KEY`。各钢铁现场的系统地址、账号、Token 和 SCP 参数均通过 `.env` 注入。
+
+```bash
+python app.py
+```
+
+默认访问地址：`http://127.0.0.1:7860`
+
+> `.env`、`.venv`、下载产物、日志和历史记录均已被 `.gitignore` 排除，不应提交到仓库。
 
 ## 🛠️ 技术栈与依赖
 
@@ -260,7 +306,10 @@ python -m agent.yongfeng.downloader --start 2026-09-01 --end 2026-09-01 \
 ```text
 BriefMe_Agent/
 ├── app.py                         # Web UI 入口
-├── config/settings.py             # 各场景 URL、阈值、盛隆/永锋 scp 配置
+├── .env.example                   # 环境变量模板（不含真实凭据）
+├── requirements.txt               # 运行依赖
+├── requirements-dev.txt           # 测试与静态检查依赖
+├── config/settings.py             # 各场景 URL、阈值与凭据读取
 ├── agent/                         # Agent 核心逻辑层
 │   ├── core.py                    # LLM 路由、工具调用分发
 │   ├── tools.py                   # 给大模型看的 Function Calling Schema
@@ -276,37 +325,33 @@ BriefMe_Agent/
 │       ├── scrap_naming.py / scrap_packager.py / scrap_remote_sync.py
 ├── tools/                         # CLI 批量导出
 ├── tests/
-└── downloads/
+├── docs/                          # 使用手册与界面截图
+└── downloads/                     # 运行时生成，不入库
 ```
 
 ---
 
-## 本次 PR：永锋数据集上传（金睛）+ 原图下载加固
+## ✨ 当前版本亮点
 
-在已有永锋检判原图下载之上，增加 datasets zip → 金睛平台上传（含分类包副本「废钢杂质数据集」→「永锋废钢杂质分割」），并加固下载侧 404/scp 行为。**不改盛隆统计公式**。
+- 重构 Web UI 标题栏、快捷指令、对话区与输出中心。
+- 加入统一的按钮悬浮、按压与短回弹动效。
+- 支持流式展示 Agent 操作状态、终止对话和“对话已终止”提示。
+- 输出中心提供产物、图片、日志三种视图。
+- 下载任务按任务归档，显示进度、状态、大小、时间和所在文件夹。
+- 下载路径、界面偏好与任务历史支持跨会话记忆。
+- 完整保留永锋、镔鑫、盛隆三条业务链路及现有自动化测试。
 
-| 范围 | 说明 |
-|---|---|
-| 打包 | `scrap_packager.py`：自动打「废钢分类数据集」，并复制为「废钢杂质数据集」；实例/边缘按主料型 |
-| 永锋上传 | `scrap_uploader.py`：无标注手动导入、两轮重试、入口锁、只停本方管辖任务、`uploaded.txt` / `upload_pending.txt` 防叠图；杂质入口固定 id=28392 |
-| 页面 / 路由 | `app.py`、`image_download_route.py`、`core.py`、`tools.py`：栏目「检判原图上传下载」；上传与下载指令互斥 |
-| 下载加固 | `downloader.py` / `scrap_client.py` / `scrap_remote_sync.py`：404 不重登、空车不 scp、远程不可达后续日期跳过 scp |
-| 配置 / 依赖 | `YongfengDatasetUploadConfig`；`requirements.txt` 增加 `boto3` |
-| 测试 | `tests/test_yongfeng_upload.py`、`test_yongfeng_download.py` |
-| 不要提交 | `download_log.txt`、运行时污染的 `deduction_exclusion_log.json`、桌面原图、`venv`、`/tmp` 下临时跑批脚本 |
-
-提交前至少跑：
+提交前建议运行：
 
 ```bash
-python -m pytest tests/test_yongfeng_upload.py tests/test_yongfeng_download.py \
-  tests/test_image_download_route.py tests/test_handbook_adversarial.py -q
-python tests/test_yongfeng_upload.py
+python -m compileall -q app.py agent config tools tests
+python -m pytest -q
 python -c "import app; app.build_ui(); print('UI OK')"
 ```
 
 ## 🧑‍💻 开发者交接与协同规范 (Git Workflow)
 
-为了保证工业级代码的绝对稳定，后续接手维护的工程师/实习生，请严格遵守以下开发规范：
+为了保证工业级代码的稳定，后续维护人员请遵守以下开发规范：
 
 ### 1. 核心铁律
 * **业务隔离**：不同现场的数据结构不同，切勿生搬硬套。永锋检判原图不要 import 盛隆 `dict` / `ShenglongClient`，也不要写入 `sl_feigang`。
@@ -346,3 +391,7 @@ git push -u origin fix-xxx-bug
 *推送到云端后，请在 GitHub 网页端发起 **Pull Request (PR)**。此时云端机器会自动进行测试，当流水线全部通过（变绿）后，系统将自动把你的代码安全合入主干。*
 
 ---
+
+## 📚 文档
+
+- [BriefMe 使用手册](docs/BriefMe使用手册.md)

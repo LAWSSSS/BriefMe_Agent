@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
             f"  · 周期 {gs}~{ge}{' [合并]' if len(group) > 1 else ''}: "
             f"检判 {car_count} 车 / 可评估 {period.judgable_trucks} / "
             f"识别率 {period.recognition_rate_pct:.2f}% / "
-            f"扣重符合率 {period.sheet_deduction_compliance_rate_pct:.2f}%"
+            f"扣重符合率 {period.deduction_compliance_rate_pct:.2f}%"
         )
         cycles_data.append((report_stats, period))
 

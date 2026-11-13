@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -252,8 +253,8 @@ def test_upload_zips_for_dates_aggregates():
 def test_settings_upload_credentials():
     cfg = settings.yongfeng_upload
     assert cfg.base_url.startswith("http")
-    assert cfg.username == "intern1"
-    assert cfg.password
+    assert cfg.username == os.getenv("YONGFENG_UPLOAD_USERNAME", "")
+    assert cfg.password == os.getenv("YONGFENG_UPLOAD_PASSWORD", "")
     assert cfg.namespace == 1
     assert cfg.dataset_name_prefix == "永锋-"
     assert cfg.impurity_dataset_name == "永锋废钢杂质分割"

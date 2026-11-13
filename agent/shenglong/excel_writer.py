@@ -1094,21 +1094,24 @@ def _box_metrics(stats_list: List[DailyShenglongStats]) -> dict:
 
 
 def _metric_lines(m: dict, target_r: float, target_c: float) -> List[str]:
+    def _pct(value) -> str:
+        return "N/A" if value is None else f"{value:.2f}%"
+
     return [
         (
             f"总车数：{m['total_trucks']}    "
             f"可判定车数：{m['judgable']}    "
             f"主料一致：{m['main_match']}"
         ),
-        f"主料识别率 R：{'N/A' if m['match_rate'] is None else f'{m['match_rate']:.2f}%'}",
+        f"主料识别率 R：{_pct(m['match_rate'])}",
         (
-            f"识别准确率90：{'N/A' if m['r90'] is None else f'{m['r90']:.2f}%'}"
-            f" / 识别准确率85：{'N/A' if m['r85'] is None else f'{m['r85']:.2f}%'}"
+            f"识别准确率90：{_pct(m['r90'])}"
+            f" / 识别准确率85：{_pct(m['r85'])}"
             f"  (目标 ≥ {int(target_r * 100)}% / 85%)"
         ),
         f"扣杂可评估车数：{m['dd_eval']}    扣杂符合车数：{m['dd_ok']}",
         (
-            f"扣杂符合率：{'N/A' if m['c'] is None else f'{m['c']:.2f}%'}"
+            f"扣杂符合率：{_pct(m['c'])}"
             f"  (目标 ≥ {int(target_c * 100)}%)"
         ),
     ]
