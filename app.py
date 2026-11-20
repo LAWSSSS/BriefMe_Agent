@@ -4642,6 +4642,11 @@ def build_ui() -> gr.Blocks:
             history.append({"role": "assistant", "content": "\n".join(lines)})
             yield history, session, xlsx, pptx, imgs, None
 
+        def _mark_run_failed(session):
+            run_data = session.get("current_run")
+            if isinstance(run_data, dict):
+                run_data["status"] = "failed"
+
         def download_image_handler(message, history, session, save_dir, *, yongfeng: bool):
             history = _normalize_chat_history(history)
             dest = (save_dir or "").strip() or _parse_save_path(message)
@@ -4693,6 +4698,8 @@ def build_ui() -> gr.Blocks:
                 for event in iter_fn(output_dir=dest, dates=dates):
                     if event.get("type") == "done":
                         result = event.get("result") or {}
+                        if yongfeng and result.get("failed"):
+                            _mark_run_failed(session)
                         zips = result.get("zip_files") or []
                         zip_text = "\n".join(f"- {p}" for p in zips) if zips else "- 无"
                         scp_text = result.get("scp_report") or ""
@@ -4729,6 +4736,8 @@ def build_ui() -> gr.Blocks:
                     xlsx, pptx, imgs = _scan_latest_artifacts()
                     yield history, session, xlsx, pptx, imgs, None
             except Exception as exc:
+                if yongfeng:
+                    _mark_run_failed(session)
                 lines.append(f"❌ 下载中断：{exc}\n已写入的文件仍在 {dest}，重跑同一日期会跳过已有文件。")
                 history[-1]["content"] = "\n".join(lines[-50:])
                 xlsx, pptx, imgs = _scan_latest_artifacts()
@@ -4738,7 +4747,7 @@ def build_ui() -> gr.Blocks:
             """永锋 datasets/ zip 上传到金睛平台（单独指令，逐日流式汇报）。"""
             history = _normalize_chat_history(history)
             dest = (save_dir or "").strip() or _parse_save_path(message)
-            dates = parse_yongfeng_dates(message)
+            dates = parse_yongfeng_dates(message.replace("～", "到").replace("~", "到"))
             xlsx, pptx, imgs = _scan_latest_artifacts()
             if not dest:
                 history.append({
@@ -4769,7 +4778,8 @@ def build_ui() -> gr.Blocks:
                     f"📤 开始上传 {date_label} 的【永锋】数据集 zip 到金睛平台\n"
                     f"（pre-athena-mv.cisdigital.cn，无标注模式导入）\n"
                     f"目录：{dest}\n"
-                    "每个 zip 上传后会自动建导入任务并等待结果。"
+                    "每个 zip 上传后会自动建导入任务并等待结果。\n"
+                    f"上传日志：{dest}/upload_progress.log"
                 ),
             })
             yield history, session, xlsx, pptx, imgs, None
@@ -4789,6 +4799,8 @@ def build_ui() -> gr.Blocks:
                         yield history, session, xlsx, pptx, imgs, None
                     elif event.get("type") == "done":
                         result = event.get("result") or {}
+                        if result.get("failed"):
+                            _mark_run_failed(session)
                         # 用最终态（含统一重试结果）重写逐日块，避免留下首轮 ⏳
                         lines = [lines[0]]
                         for day in result.get("days") or []:
@@ -4803,6 +4815,7 @@ def build_ui() -> gr.Blocks:
                         xlsx, pptx, imgs = _scan_latest_artifacts()
                         yield history, session, xlsx, pptx, imgs, None
             except Exception as exc:
+                _mark_run_failed(session)
                 lines.append(f"❌ 上传中断：{exc}")
                 history[-1]["content"] = "\n".join(lines[-80:])
                 xlsx, pptx, imgs = _scan_latest_artifacts()
@@ -5040,6 +5053,11 @@ def build_ui() -> gr.Blocks:
                         ).strip()
                     else:
                         user_message = str(content).strip()
+                    if last_item.get("role") != "user" and (
+                        is_yongfeng_dataset_upload(user_message)
+                        or is_yongfeng_image_download(user_message)
+                    ):
+                        return
 
             current_session = copy.deepcopy(
                 session or {"vpn_state": "unknown", "messages": []}
@@ -5057,6 +5075,10 @@ def build_ui() -> gr.Blocks:
             last_history = history
             last_session = current_session
             status = "success"
+            progress_log = (
+                "upload_progress.log" if is_yongfeng_dataset_upload(user_message)
+                else "download_progress.log"
+            )
 
             try:
                 for result in _dispatch_route(
@@ -5072,10 +5094,12 @@ def build_ui() -> gr.Blocks:
                     run_data = current_session.get("current_run")
                     if isinstance(run_data, dict):
                         run = run_from_dict(run_data)
+                        if run.status == "failed":
+                            status = "failed"
                     else:
                         sync_current_run(current_session, run)
                     for directory in run.output_dirs:
-                        log_candidate = Path(directory) / "download_progress.log"
+                        log_candidate = Path(directory) / progress_log
                         if log_candidate.is_file():
                             run.log_path = str(log_candidate)
                             break
@@ -5129,8 +5153,13 @@ def build_ui() -> gr.Blocks:
                 )
 
         # ------- 事件绑定 -------
-        def _fill_message(text):
-            return text
+        def _fill_message(text, project, business, command):
+            if (project, business) == ("永锋钢铁", "检判原图上传下载"):
+                selected = q[project][business].get(command)
+                if selected is None:
+                    return gr.skip(), gr.skip()
+                return selected, selected
+            return text, gr.skip()
 
         def _wire_submit(trigger):
             return trigger(
@@ -5266,7 +5295,12 @@ def build_ui() -> gr.Blocks:
             outputs=command_preview,
             queue=False,
         )
-        fill_btn.click(_fill_message, inputs=command_preview, outputs=msg, queue=False)
+        fill_btn.click(
+            _fill_message,
+            inputs=[command_preview, project_select, business_select, command_select],
+            outputs=[msg, command_preview],
+            queue=False,
+        )
 
     def _open_file_endpoint(token: str):
         path = _resolve_file_selection_target(token)
@@ -5308,9 +5342,10 @@ GRADIO_SHARE = False
 
 if __name__ == "__main__":
     demo = build_ui()
+    # 未固定 BRIEFME_PORT 时，由 Gradio 从 7860 起查找可用端口。
     demo.launch(
         server_name=GRADIO_SERVER_NAME,
-        server_port=int(os.environ.get("BRIEFME_PORT", "7860")),
+        server_port=int(port) if (port := os.getenv("BRIEFME_PORT")) else None,
         share=GRADIO_SHARE,
         theme=THEME,
         css=CUSTOM_CSS,
